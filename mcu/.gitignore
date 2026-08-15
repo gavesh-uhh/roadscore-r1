@@ -1,0 +1,9 @@
+# Secrets — never commit real credentials
+secrets.h
+
+# Arduino / PlatformIO build artifacts
+build/
+.pio/
+*.bin
+*.elf
+*.hex

@@ -1,0 +1,50 @@
+{
+  "name": "roadscore-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "replay": "tsx src/replay/cli.ts",
+    "capture": "tsx scripts/capture.ts",
+    "migrate": "tsx scripts/migrate.ts",
+    "maintenance": "tsx scripts/maintenance.ts",
+    "loadtest": "tsx scripts/loadtest.ts",
+    "sim": "tsx scripts/simulate-device.ts",
+    "sim:live": "tsx scripts/simulate-device.ts --live",
+    "sim:live:penalties": "tsx scripts/simulate-device.ts --live --preset driver-penalties",
+    "sim:live:worst": "tsx scripts/simulate-device.ts --live --preset worst-driver",
+    "sim:penalties": "tsx scripts/simulate-device.ts --scenario driver-penalties --delay 1000",
+    "sim:worst": "tsx scripts/simulate-device.ts --scenario worst-driver --delay 1000",
+    "sim:scenarios": "tsx scripts/simulate-device.ts --scenario all --delay 50"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "fastify": "^4.28.0",
+    "h3-js": "^4.1.0",
+    "pino": "^9.4.0",
+    "postgres": "^3.4.4",
+    "prom-client": "^15.1.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "allowScripts": {
+    "esbuild@0.27.7": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true
+  }
+}

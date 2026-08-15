@@ -1,0 +1,35 @@
+{
+  "name": "roadscore-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RoadScore (R1) - Edge Telematics, Road Quality Mapping & Transparent Driver Safety Scoring",
+  "type": "module",
+  "workspaces": [
+    "engine",
+    "web"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "dev:sim": "node scripts/dev.js --sim",
+    "dev:worst": "node scripts/dev.js --sim-worst",
+    "dev:penalties": "node scripts/dev.js --sim-penalties",
+    "build": "npm run build --workspace=engine && npm run build --workspace=web",
+    "start": "node scripts/start.js",
+    "test": "npm test --workspace=engine",
+    "typecheck": "npm run typecheck --workspace=engine && npm run lint --workspace=web",
+    "sim:live": "npm run sim:live --workspace=engine",
+    "sim:worst": "npm run sim:worst --workspace=engine",
+    "sim:live:worst": "npm run sim:live:worst --workspace=engine"
+  },
+  "keywords": [
+    "telematics",
+    "iot",
+    "esp32",
+    "nextjs",
+    "driver-scoring",
+    "road-quality",
+    "pothole-detection"
+  ],
+  "author": "RoadScore Team",
+  "license": "MIT"
+}

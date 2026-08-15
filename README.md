@@ -30,13 +30,13 @@ flowchart TD
         DET_SPD["Speed Compliance Detector"]
         DET_IMP["Impact Detector"]
         DET_DUTY["Duty & Idle Detector"]
-        
+
         HTTP --> NORM
         NORM --> DET_LONG & DET_LAT & DET_SPD & DET_IMP & DET_DUTY
-        
+
         ARB["Spatial Arbitration (H3 Res 12)"]
         SCORE["Section 8 Scoring Engine"]
-        
+
         DET_IMP --> ARB
         DET_LONG & DET_LAT & DET_SPD & DET_DUTY --> SCORE
         ARB -->|Avoidable Impact Only| SCORE
@@ -47,7 +47,7 @@ flowchart TD
         DB_EVT["driving_events"]
         DB_DEF["road_defects"]
         DB_SCR["driver_scores"]
-        
+
         NORM --> DB_RAW
         DET_LONG & DET_LAT & DET_SPD & DET_DUTY --> DB_EVT
         ARB --> DB_DEF
@@ -60,7 +60,7 @@ flowchart TD
         UI_TRIPS["Kinematic Trip Replay"]
         UI_DEFECTS["Road Defect Heatmap"]
         UI_HEALTH["Hardware Health Monitor"]
-        
+
         Database --> Frontend
     end
 ```
@@ -71,10 +71,10 @@ flowchart TD
 
 | Directory | Stack | Responsibility |
 | :--- | :--- | :--- |
-| [`mcu/`](file:///home/gav/Projects/roadscore-r1/mcu) | C++ / PlatformIO / ESP32 | High-frequency sensor sampling, gravity baseline estimation, ring buffer storage, and TLS sync. |
-| [`engine/`](file:///home/gav/Projects/roadscore-r1/engine) | Node.js 20+ / TypeScript / Vitest | Kinematic event detection, H3 spatial road mapping, defect arbitration, and scoring rollup. |
-| [`web/`](file:///home/gav/Projects/roadscore-r1/web) | Next.js 16 / React 19 / Tailwind CSS | Fleet tracking, real-time driver scorecards, kinematic replay, and road quality visualizer. |
-| [`db/`](file:///home/gav/Projects/roadscore-r1/db) | PostgreSQL / Supabase SQL | Relational schema, PostGIS/H3 geospatial indexes, RLS policies, and continuous scoring views. |
+| [`mcu/`](mcu) | C++ / PlatformIO / ESP32 | High-frequency sensor sampling, gravity baseline estimation, ring buffer storage, and TLS sync. |
+| [`engine/`](engine) | Node.js 20+ / TypeScript / Vitest | Kinematic event detection, H3 spatial road mapping, defect arbitration, and scoring rollup. |
+| [`web/`](web) | Next.js 16 / React 19 / Tailwind CSS | Fleet tracking, real-time driver scorecards, kinematic replay, and road quality visualizer. |
+| [`db/`](db) | PostgreSQL / Supabase SQL | Relational schema, PostGIS/H3 geospatial indexes, RLS policies, and continuous scoring views. |
 
 ---
 

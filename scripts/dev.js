@@ -40,19 +40,15 @@ const withSim = args.includes('--sim');
 const withSimWorst = args.includes('--sim-worst') || args.includes('--worst');
 const withSimPenalties = args.includes('--sim-penalties') || args.includes('--penalties');
 
-console.log(`${COLORS.bold}${COLORS.cyan}================================================================${COLORS.reset}`);
-console.log(`${COLORS.bold}${COLORS.cyan}             🚗  RoadScore (R1) - Local Dev Orchestrator         ${COLORS.reset}`);
-console.log(`${COLORS.bold}${COLORS.cyan}================================================================${COLORS.reset}\n`);
-
 // Environment sanity checks
 const webEnv = path.join(WEB_DIR, '.env.local');
 const engineEnv = path.join(ENGINE_DIR, '.env');
 
 if (!fs.existsSync(webEnv) && !fs.existsSync(path.join(WEB_DIR, '.env'))) {
-  console.log(`${COLORS.yellow}⚠️  Warning: web/.env.local not found. Copying web/.env.example if available...${COLORS.reset}`);
+  console.log(`${COLORS.yellow}Warning: web/.env.local not found. Copying web/.env.example if available...${COLORS.reset}`);
 }
 if (!fs.existsSync(engineEnv)) {
-  console.log(`${COLORS.yellow}⚠️  Warning: engine/.env not found. Ensure SUPABASE credentials are set in engine/.env${COLORS.reset}`);
+  console.log(`${COLORS.yellow}Warning: engine/.env not found. Ensure SUPABASE credentials are set in engine/.env${COLORS.reset}`);
 }
 
 const children = [];
@@ -124,7 +120,7 @@ console.log(`\n${COLORS.gray}Press Ctrl+C to stop all services simultaneously.${
 
 // Graceful cleanup handler
 function shutdown() {
-  console.log(`\n${COLORS.yellow}🛑 Shutting down all RoadScore services...${COLORS.reset}`);
+  console.log(`\n${COLORS.yellow}[!] Shutting down all RoadScore services...${COLORS.reset}`);
   for (const { name, child } of children) {
     try {
       if (process.platform === 'win32') {

@@ -67,25 +67,67 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
           }
 
           const mappedTelemetry: RawTelemetryRow[] = telData.map((t: any, i: number) => {
-            const fsG = Number(t.accel_fs_g || 2);
+            const fsG = Number(t.accel_fs_g || devData?.accel_fs_g || 2);
             const countsPerG = 32768 / fsG;
-            const fsDps = Number(t.gyro_fs_dps || 250);
+            const fsDps = Number(t.gyro_fs_dps || devData?.gyro_fs_dps || 250);
             const countsPerDps = 32768 / fsDps;
 
-            const rawVertRms = Number(t.accel_cal?.vertical_rms ?? t.calibrated_accel?.a_vert ?? 0);
-            const vertRms = rawVertRms > 100 ? rawVertRms / countsPerG : rawVertRms;
+            // Accel Calibrated / Raw conversion
+            let vertRms = 0;
+            if (t.accel_cal?.vertical_rms != null) {
+              vertRms = Number(t.accel_cal.vertical_rms) / countsPerG;
+            } else if (t.calibrated_accel?.a_vert != null || t.calibrated_accel?.rms_g != null) {
+              vertRms = Number(t.calibrated_accel.a_vert ?? t.calibrated_accel.rms_g);
+            } else if (t.accel_raw?.z != null || t.accel_raw?.az != null) {
+              vertRms = Number(t.accel_raw.z ?? t.accel_raw.az) / countsPerG;
+            }
 
-            const rawHorizPeak = Number(t.accel_cal?.horizontal_peak ?? t.calibrated_accel?.a_long ?? 0.0);
-            const horizPeak = rawHorizPeak > 100 ? rawHorizPeak / countsPerG : rawHorizPeak;
+            let vertPeak = vertRms;
+            if (t.accel_cal?.vertical_peak != null) {
+              vertPeak = Number(t.accel_cal.vertical_peak) / countsPerG;
+            } else if (t.calibrated_accel?.peak_g != null) {
+              vertPeak = Number(t.calibrated_accel.peak_g);
+            }
 
-            const rawMagPeak = Number(t.accel_cal?.magnitude_peak ?? t.calibrated_accel?.peak_g ?? 0);
-            const magPeak = rawMagPeak > 100 ? rawMagPeak / countsPerG : rawMagPeak;
+            let horizPeak = 0;
+            if (t.accel_cal?.horizontal_peak != null) {
+              horizPeak = Number(t.accel_cal.horizontal_peak) / countsPerG;
+            } else if (t.calibrated_accel?.a_long != null) {
+              horizPeak = Number(t.calibrated_accel.a_long);
+            } else if (t.accel_raw?.x != null || t.accel_raw?.ax != null) {
+              horizPeak = Number(t.accel_raw.x ?? t.accel_raw.ax) / countsPerG;
+            }
 
-            const rawYaw = Number(t.gyro_cal?.yaw_rate_peak ?? t.gyro_cal?.yaw_rate_deg_s ?? t.yaw_rate ?? 0.0);
-            const yaw = rawYaw > 10 ? rawYaw / countsPerDps : rawYaw;
+            let magPeak = 0;
+            if (t.accel_cal?.magnitude_peak != null) {
+              magPeak = Number(t.accel_cal.magnitude_peak) / countsPerG;
+            } else if (t.calibrated_accel?.peak_g != null) {
+              magPeak = Number(t.calibrated_accel.peak_g);
+            } else {
+              magPeak = Math.hypot(horizPeak, vertRms);
+            }
+
+            let latVal = 0;
+            if (t.calibrated_accel?.a_lat != null) {
+              latVal = Number(t.calibrated_accel.a_lat);
+            } else if (t.accel_raw?.y != null || t.accel_raw?.ay != null) {
+              latVal = Number(t.accel_raw.y ?? t.accel_raw.ay) / countsPerG;
+            }
+
+            // Gyro Calibrated / Raw conversion
+            let yaw = 0;
+            if (t.gyro_cal?.yaw_rate_peak != null) {
+              yaw = Number(t.gyro_cal.yaw_rate_peak) / countsPerDps;
+            } else if (t.gyro_cal?.yaw_rate_deg_s != null || t.yaw_rate != null) {
+              yaw = Number(t.gyro_cal?.yaw_rate_deg_s ?? t.yaw_rate);
+            } else if (t.gyro_raw?.z != null || t.gyro_raw?.gz != null) {
+              yaw = Number(t.gyro_raw.z ?? t.gyro_raw.gz) / countsPerDps;
+            }
+
             const micVal = Number(t.mic?.rms ?? t.mic_rms ?? 0);
-
-            const hasFix = Boolean(t.gps?.fix === true || (t.gps?.lat != null && t.gps?.lat !== 0));
+            const hasFix = Boolean(t.gps?.fix === true || (t.gps?.lat != null && Number(t.gps?.lat) !== 0));
+            const isCalibrated = String(t.calibration?.state ?? '').toLowerCase() === 'calibrated' || Boolean(t.accel_cal);
+            const storageOk = t.storage_ok ?? (t.dropped_posts != null ? Number(t.dropped_posts) === 0 : true);
 
             return {
               id: t.id,
@@ -100,9 +142,9 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
               },
               calibrated_accel: {
                 a_long: horizPeak,
-                a_lat: 0,
+                a_lat: latVal,
                 a_vert: vertRms,
-                peak_g: magPeak,
+                peak_g: vertPeak > magPeak ? vertPeak : magPeak,
                 rms_g: vertRms,
               },
               yaw_rate: yaw,
@@ -117,10 +159,10 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
               },
               flags: {
                 gps_fix: hasFix,
-                calibrated: String(t.calibration?.state ?? '').toLowerCase() === 'calibrated' || Boolean(t.accel_cal),
-                imu_ready: t.accel_raw != null,
-                mic_active: t.mic != null,
-                storage_ok: true,
+                calibrated: isCalibrated,
+                imu_ready: Boolean(t.accel_raw || t.accel_cal),
+                mic_active: Boolean(t.mic && (Number(t.mic?.rms ?? 0) > 0 || Number(t.mic?.peak ?? 0) > 0)),
+                storage_ok: storageOk,
               },
               raw_payload: t,
             };
@@ -156,7 +198,8 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
     };
   }, [deviceId, supabase]);
 
-  const waveformChartData = telemetry.map((row) => ({
+  // Reverse so waveform renders chronologically from left to right (increasing sequence/time)
+  const waveformChartData = [...telemetry].reverse().map((row) => ({
     seq: row.seq,
     a_long: row.calibrated_accel.a_long,
     a_vert_rms: row.calibrated_accel.rms_g,
@@ -172,6 +215,7 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
   const liveRssi = latestRaw?.wifi_rssi ?? -99;
   const liveDropped = latestRaw?.dropped_posts ?? 0;
   const liveFw = latestRaw?.fw_version ?? '1.0.0-mcu';
+  const freeHeap = latestRaw?.free_heap_kb ?? latestRaw?.heap_free_kb ?? device.free_heap_kb ?? 184;
 
   return (
     <div className="flex flex-col min-h-screen bg-black text-white font-sans text-xs">
@@ -200,6 +244,7 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
         {/* Top Pane: ESP32 Health & IMU Calibration Header */}
         <DeviceHealthHeader
           device={device}
+          freeHeapKb={freeHeap}
           wifiRssiDbm={liveRssi}
           droppedPosts={liveDropped}
           firmwareVersion={liveFw}

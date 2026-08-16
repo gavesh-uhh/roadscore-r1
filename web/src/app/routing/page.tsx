@@ -173,32 +173,32 @@ export default function SmartRoutingPage() {
   const mapHexagons: MapHexagon[] = useMemo(() => {
     if (!showH3Grid) return [];
 
-    return roadCells.map((cell) => {
+    const hexList: MapHexagon[] = [];
+    for (const cell of roadCells) {
+      if (!cell.h3_12) continue;
+      let boundary: [number, number][] = [];
+      try {
+        boundary = cellToBoundary(cell.h3_12);
+      } catch {
+        continue;
+      }
+      if (!boundary || boundary.length === 0) continue;
+
       let color = '#22c55e';
       if (cell.roughness_index >= 75) color = '#ef4444';
       else if (cell.roughness_index >= 50) color = '#f97316';
       else if (cell.roughness_index >= 25) color = '#eab308';
 
-      let boundary: [number, number][] = [];
-      try {
-        boundary = cellToBoundary(cell.h3_12);
-      } catch {
-        boundary = [
-          [6.915, 79.852],
-          [6.916, 79.854],
-          [6.915, 79.856],
-          [6.914, 79.854],
-        ];
-      }
-
-      return {
+      hexList.push({
         id: cell.h3_12,
         boundary,
         color,
         fillOpacity: 0.2,
         tooltipText: `Roughness: ${Number(cell.roughness_index || 0).toFixed(1)}/100`,
-      };
-    });
+      });
+    }
+
+    return hexList;
   }, [roadCells, showH3Grid]);
 
   return (

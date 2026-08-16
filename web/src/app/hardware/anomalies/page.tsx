@@ -35,11 +35,33 @@ export default function HardwareAnomaliesLog() {
 
       if (data && !error) {
         const mapped: AnomalyEvent[] = data.map((e: any, idx: number) => {
-          let msg = e.evidence?.reason || (Array.isArray(e.evidence?.reasons) ? e.evidence.reasons.join(', ') : e.evidence?.description) || 'Hardware integrity condition detected';
-          if (e.type?.includes('mount')) {
-            msg = `Mount angle shift detected (${e.magnitude ? `${e.magnitude}°` : 'dynamic drift'})`;
-          } else if (e.type?.includes('sample_rate') || e.type?.includes('dropout')) {
-            msg = `Telemetry sampling irregularity / frame dropout`;
+          let msg = e.evidence?.reason || (Array.isArray(e.evidence?.reasons) ? e.evidence.reasons.join(', ') : e.evidence?.description) || '';
+          
+          if (e.type === 'integrity.mount_shift' || e.type?.includes('mount')) {
+            msg = `Mount angle shift detected (${e.magnitude ? `${e.magnitude}° deviation` : 'dynamic drift'})`;
+          } else if (e.type === 'integrity.data_gap' || e.type?.includes('gap') || e.type?.includes('dropout')) {
+            const gapS = e.evidence?.time_gap_s ? `${e.evidence.time_gap_s}s gap` : 'sample interruption';
+            const missing = e.evidence?.missing_rows ? `missing ~${e.evidence.missing_rows} rows` : 'sequence jump';
+            msg = `Data gap: ${missing} (${gapS})`;
+          } else if (e.type === 'integrity.device_reboot' || e.type?.includes('reboot')) {
+            const prevSeq = e.evidence?.previous_seq != null ? `#${e.evidence.previous_seq}` : '?';
+            const newSeq = e.evidence?.new_seq != null ? `#${e.evidence.new_seq}` : '#1';
+            msg = `MCU restart / reboot detected (sequence reset: ${prevSeq} -> ${newSeq})`;
+          } else if (e.type === 'integrity.calibration_stale' || e.type?.includes('stale')) {
+            const staleSec = e.evidence?.stale_for_s ? `for ${e.evidence.stale_for_s}s` : 'timeout';
+            msg = `IMU calibration lock stale ${staleSec} (state: ${e.evidence?.calibration_state || 'unknown'})`;
+          } else if (e.type === 'integrity.upload_loss' || e.type?.includes('upload') || e.type?.includes('spool')) {
+            const rssi = e.evidence?.wifi_rssi != null ? `RSSI: ${e.evidence.wifi_rssi} dBm` : 'spooling active';
+            msg = `Telemetry upload loss: ${e.evidence?.cause || 'LittleFS flash spooling'} (${rssi})`;
+          } else if (e.type === 'integrity.gps_degraded' || e.type?.includes('gps')) {
+            msg = `GNSS degraded: ${e.evidence?.trigger || 'HDOP loss or zero satellite lock'}`;
+          } else if (e.type === 'integrity.sensor_degraded' || e.type?.includes('sensor')) {
+            const reasons = Array.isArray(e.evidence?.reasons) ? e.evidence.reasons.join(', ') : (e.evidence?.reason || 'signal degradation');
+            msg = `Sensor integrity degraded: ${reasons}`;
+          }
+
+          if (!msg) {
+            msg = 'Hardware integrity condition detected';
           }
 
           return {

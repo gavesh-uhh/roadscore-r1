@@ -16,31 +16,44 @@ import {
  * Strictly queries canonical tables: public.drivers, public.vehicles, public.devices.
  */
 export async function getFleetData(supabase: SupabaseClient) {
-  const [driversRes, vehiclesRes, devicesRes] = await Promise.all([
+  const [driversRes, vehiclesRes, devicesRes, tripsRes] = await Promise.all([
     supabase.from('drivers').select('*').order('created_at', { ascending: false }),
     supabase.from('vehicles').select('*').order('plate', { ascending: true }),
     supabase.from('devices').select('*').order('device_id', { ascending: true }),
+    supabase.from('trips').select('id, device_id, vehicle_id, driver_id, distance_m, status, ended_at').order('started_at', { ascending: false }),
   ]);
 
   const rawDrivers = driversRes.data || [];
   const rawVehicles = vehiclesRes.data || [];
   const rawDevices = devicesRes.data || [];
+  const rawTrips = tripsRes.data || [];
 
   // Build lookups
-  const vehicleMap = new Map<string, any>();
+  const vehicleMap = new Map<string, { id: string; plate?: string | null; make?: string | null; model?: string | null; year?: number | null }>();
   rawVehicles.forEach((v) => vehicleMap.set(v.id, v));
 
-  const driverMap = new Map<string, any>();
+  const driverMap = new Map<string, { id: string; name: string; licence_ref?: string | null }>();
   rawDrivers.forEach((d) => driverMap.set(d.id, d));
 
-  const deviceMapByVehicle = new Map<string, any>();
-  const deviceMapByDriver = new Map<string, any>();
+  // Build 1-to-1 device mappings giving priority to active hardware
+  const deviceMapByVehicle = new Map<string, { device_id: string; vehicle_id?: string | null; driver_id?: string | null; active?: boolean }>();
+  const deviceMapByDriver = new Map<string, { device_id: string; vehicle_id?: string | null; driver_id?: string | null; active?: boolean }>();
   rawDevices.forEach((d) => {
-    if (d.vehicle_id) deviceMapByVehicle.set(d.vehicle_id, d);
-    if (d.driver_id) deviceMapByDriver.set(d.driver_id, d);
+    if (d.vehicle_id) {
+      const existing = deviceMapByVehicle.get(d.vehicle_id);
+      if (!existing || (d.active && !existing.active)) {
+        deviceMapByVehicle.set(d.vehicle_id, d);
+      }
+    }
+    if (d.driver_id) {
+      const existing = deviceMapByDriver.get(d.driver_id);
+      if (!existing || (d.active && !existing.active)) {
+        deviceMapByDriver.set(d.driver_id, d);
+      }
+    }
   });
 
-  const drivers: DriverRecord[] = rawDrivers.map((d: any) => {
+  const drivers: DriverRecord[] = rawDrivers.map((d) => {
     const dev = deviceMapByDriver.get(d.id);
     const v = dev?.vehicle_id ? vehicleMap.get(dev.vehicle_id) : null;
     return {
@@ -54,9 +67,29 @@ export async function getFleetData(supabase: SupabaseClient) {
     };
   });
 
-  const vehicles: VehicleRecord[] = rawVehicles.map((v: any) => {
+  const vehicles: VehicleRecord[] = rawVehicles.map((v) => {
     const dev = deviceMapByVehicle.get(v.id);
     const d = dev?.driver_id ? driverMap.get(dev.driver_id) : null;
+    const assignedDevId = dev?.device_id ?? null;
+
+    // Attribute real trips to vehicle by direct vehicle_id or assigned device_id
+    const vehicleTrips = rawTrips.filter(
+      (t) => t.vehicle_id === v.id || (assignedDevId && t.device_id === assignedDevId)
+    );
+
+    const totalDistanceMeters = vehicleTrips.reduce(
+      (sum: number, t) => sum + (Number(t.distance_m) || 0),
+      0
+    );
+    const totalDistanceKm = Number((totalDistanceMeters / 1000).toFixed(1));
+    const totalTripsCount = vehicleTrips.length;
+
+    // Check if vehicle is currently moving in an active trip
+    const activeTrip = vehicleTrips.find((t) => {
+      const st = String(t.status || '').toLowerCase();
+      return (st === 'open' || !t.ended_at) && st !== 'closed' && st !== 'abandoned';
+    });
+
     return {
       id: v.id,
       plate: v.plate ?? null,
@@ -65,11 +98,15 @@ export async function getFleetData(supabase: SupabaseClient) {
       year: v.year ?? null,
       assigned_driver_id: d?.id ?? null,
       assigned_driver_name: d?.name ?? null,
-      assigned_device_id: dev?.device_id ?? null,
+      assigned_device_id: assignedDevId,
+      total_distance_km: totalDistanceKm,
+      total_trips: totalTripsCount,
+      active_trip_id: activeTrip ? String(activeTrip.id || '') : null,
+      is_active_moving: Boolean(activeTrip),
     };
   });
 
-  const devices: DeviceRecord[] = rawDevices.map((dev: any) => {
+  const devices: DeviceRecord[] = rawDevices.map((dev) => {
     const v = dev.vehicle_id ? vehicleMap.get(dev.vehicle_id) : null;
     const d = dev.driver_id ? driverMap.get(dev.driver_id) : null;
     return {
@@ -110,12 +147,12 @@ export async function createDriver(supabase: SupabaseClient, input: CreateDriver
 }
 
 export async function updateDriver(supabase: SupabaseClient, id: string, input: UpdateDriverInput) {
-  const updatePayload: Record<string, any> = {};
+  const updatePayload: Record<string, unknown> = {};
   if (input.name !== undefined) updatePayload.name = input.name.trim();
   if (input.licence_ref !== undefined) updatePayload.licence_ref = input.licence_ref ? input.licence_ref.trim() : null;
 
   if (Object.keys(updatePayload).length > 0) {
-    const { data, error } = await supabase.from('drivers').update(updatePayload).eq('id', id).select().single();
+    const { error } = await supabase.from('drivers').update(updatePayload).eq('id', id).select().single();
     if (error) throw error;
   }
 
@@ -131,8 +168,9 @@ export async function updateDriver(supabase: SupabaseClient, id: string, input: 
 }
 
 export async function deleteDriver(supabase: SupabaseClient, id: string) {
-  // Clear FK in devices first
+  // Clear FK in devices and trips first
   await supabase.from('devices').update({ driver_id: null }).eq('driver_id', id);
+  await supabase.from('trips').update({ driver_id: null }).eq('driver_id', id);
   const { error } = await supabase.from('drivers').delete().eq('id', id);
   if (error) throw error;
   return true;
@@ -163,14 +201,14 @@ export async function createVehicle(supabase: SupabaseClient, input: CreateVehic
 }
 
 export async function updateVehicle(supabase: SupabaseClient, id: string, input: UpdateVehicleInput) {
-  const updatePayload: Record<string, any> = {};
+  const updatePayload: Record<string, unknown> = {};
   if (input.plate !== undefined) updatePayload.plate = input.plate.trim().toUpperCase();
   if (input.make !== undefined) updatePayload.make = input.make ? input.make.trim() : null;
   if (input.model !== undefined) updatePayload.model = input.model ? input.model.trim() : null;
   if (input.year !== undefined) updatePayload.year = input.year ? Number(input.year) : null;
 
   if (Object.keys(updatePayload).length > 0) {
-    const { data, error } = await supabase.from('vehicles').update(updatePayload).eq('id', id).select().single();
+    const { error } = await supabase.from('vehicles').update(updatePayload).eq('id', id).select().single();
     if (error) throw error;
   }
 
@@ -192,8 +230,9 @@ export async function updateVehicle(supabase: SupabaseClient, id: string, input:
 }
 
 export async function deleteVehicle(supabase: SupabaseClient, id: string) {
-  // Clear FK in devices first
+  // Clear FK in devices and trips first
   await supabase.from('devices').update({ vehicle_id: null, driver_id: null }).eq('vehicle_id', id);
+  await supabase.from('trips').update({ vehicle_id: null }).eq('vehicle_id', id);
   const { error } = await supabase.from('vehicles').delete().eq('id', id);
   if (error) throw error;
   return true;
@@ -206,9 +245,12 @@ export async function deleteVehicle(supabase: SupabaseClient, id: string) {
 export async function createDevice(supabase: SupabaseClient, input: CreateDeviceInput) {
   const deviceId = input.device_id.trim();
 
-  // Enforce 1-to-1: unlink any prior device on this vehicle
+  // Enforce 1-to-1: unlink any prior device on this vehicle or driver
   if (input.vehicle_id) {
     await supabase.from('devices').update({ vehicle_id: null }).eq('vehicle_id', input.vehicle_id);
+  }
+  if (input.driver_id) {
+    await supabase.from('devices').update({ driver_id: null }).eq('driver_id', input.driver_id);
   }
 
   const insertPayload = {
@@ -227,7 +269,7 @@ export async function createDevice(supabase: SupabaseClient, input: CreateDevice
 }
 
 export async function updateDevice(supabase: SupabaseClient, deviceId: string, input: UpdateDeviceInput) {
-  const updatePayload: Record<string, any> = {};
+  const updatePayload: Record<string, unknown> = {};
   if (input.accel_fs_g !== undefined) updatePayload.accel_fs_g = Number(input.accel_fs_g);
   if (input.gyro_fs_dps !== undefined) updatePayload.gyro_fs_dps = Number(input.gyro_fs_dps);
   if (input.active !== undefined) updatePayload.active = input.active;
@@ -243,7 +285,13 @@ export async function updateDevice(supabase: SupabaseClient, deviceId: string, i
   }
 
   if (input.driver_id !== undefined) {
-    updatePayload.driver_id = input.driver_id || null;
+    if (input.driver_id) {
+      // Unlink any other device on this driver
+      await supabase.from('devices').update({ driver_id: null }).eq('driver_id', input.driver_id).neq('device_id', deviceId);
+      updatePayload.driver_id = input.driver_id;
+    } else {
+      updatePayload.driver_id = null;
+    }
   }
 
   const { data, error } = await supabase.from('devices').update(updatePayload).eq('device_id', deviceId).select().single();
@@ -252,8 +300,17 @@ export async function updateDevice(supabase: SupabaseClient, deviceId: string, i
 }
 
 export async function deleteDevice(supabase: SupabaseClient, deviceId: string) {
-  const { error } = await supabase.from('devices').delete().eq('device_id', deviceId);
-  if (error) throw error;
+  try {
+    const { error } = await supabase.from('devices').delete().eq('device_id', deviceId);
+    if (error) throw error;
+  } catch {
+    // If device is referenced by foreign key in historical trips, soft-decommission and unbind instead of failing
+    await supabase.from('devices').update({
+      active: false,
+      vehicle_id: null,
+      driver_id: null,
+    }).eq('device_id', deviceId);
+  }
   return true;
 }
 
@@ -266,11 +323,16 @@ export async function assignDeviceToVehicle(
   vehicleId: string,
   driverId?: string | null
 ) {
-  // 1. Unlink other device currently on this vehicle
+  // 1. Unlink other devices currently on this vehicle
   await supabase.from('devices').update({ vehicle_id: null }).eq('vehicle_id', vehicleId).neq('device_id', deviceId);
 
-  // 2. Attach target device to this vehicle
-  const updatePayload: Record<string, any> = {
+  // 2. Unlink this driver from any other device
+  if (driverId) {
+    await supabase.from('devices').update({ driver_id: null }).eq('driver_id', driverId).neq('device_id', deviceId);
+  }
+
+  // 3. Attach target device to this vehicle
+  const updatePayload: Record<string, unknown> = {
     vehicle_id: vehicleId,
     installed_at: new Date().toISOString(),
   };

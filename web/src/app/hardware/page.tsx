@@ -64,7 +64,22 @@ export default function HardwareFleetRegistry() {
   useEffect(() => {
     setIsMounted(true);
     loadData();
-  }, [loadData]);
+
+    // Supabase Realtime subscription for device provisioning and pairing changes
+    const channel = supabase
+      .channel('realtime_fleet_hardware')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => {
+        loadData();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadData, supabase]);
 
   const handleSaveDevice = async (formData: {
     device_id: string;

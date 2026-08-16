@@ -9,7 +9,7 @@ inline String buildPayload(bool isInstantSpike = false) {
   doc["seq"]       = seq;
   doc["uptime_ms"] = millis();
   doc["window_ms"] = isInstantSpike ? cfg::SAMPLE_INTERVAL_MS : cfg::POST_INTERVAL_MS;
-  doc["samples"]   = win.samples > 0 ? win.samples : 1;
+  doc["samples"]   = isInstantSpike ? 1 : (win.samples > 0 ? win.samples : 1);
   if (isInstantSpike) {
     doc["is_instant_spike"] = true;
   }
@@ -105,15 +105,14 @@ inline void windowReset() { win = Window{}; }
 
 // Fast Supabase poster that supports both single object and batch JSON arrays
 inline int sendSupabasePost(WiFiClientSecure& client, HTTPClient& http, const char* payload, size_t length) {
-  if (!http.connected()) {
-    http.begin(client, SUPABASE_URL);
-    http.setReuse(true);
-    http.setTimeout(8000);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", SUPABASE_KEY);
-    http.addHeader("Authorization", "Bearer " SUPABASE_KEY);
-    http.addHeader("Prefer", "return=minimal");
-  }
+  // Always call begin() to reset internal header state while keeping underlying TLS connection alive
+  http.begin(client, SUPABASE_URL);
+  http.setReuse(true);
+  http.setTimeout(8000);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("apikey", SUPABASE_KEY);
+  http.addHeader("Authorization", "Bearer " SUPABASE_KEY);
+  http.addHeader("Prefer", "return=minimal");
 
   int code = http.POST((uint8_t*)payload, length);
   lastPostAt = millis();
@@ -204,7 +203,9 @@ inline void uploaderTask(void*) {
         File spool = LittleFS.open("/spool.txt", FILE_READ);
         if (spool && spool.size() > 0) {
           hadSpool = true;
-          String batchJson = "[";
+          String batchJson;
+          batchJson.reserve(8192);
+          batchJson = "[";
           int batchCount = 0;
 
           while (spool.available() && batchCount < 10) {
@@ -223,6 +224,7 @@ inline void uploaderTask(void*) {
             if (code >= 200 && code < 300) {
               Serial.printf("POST spool batch (%d rows) -> %d\n", batchCount, code);
               if (spool.available()) {
+                LittleFS.remove("/tmp.txt");
                 File tmp = LittleFS.open("/tmp.txt", FILE_WRITE);
                 if (tmp) {
                   while (spool.available()) {
@@ -231,13 +233,17 @@ inline void uploaderTask(void*) {
                     if (line.length() > 0) tmp.println(line);
                   }
                   tmp.close();
+                  spool.close();
+                  LittleFS.remove("/spool.txt");
+                  LittleFS.rename("/tmp.txt", "/spool.txt");
+                } else {
+                  spool.close();
+                  Serial.println("[Spool] ERROR: Failed to open /tmp.txt for spool rewrite");
                 }
-                spool.close();
-                LittleFS.remove("/spool.txt");
-                LittleFS.rename("/tmp.txt", "/spool.txt");
               } else {
                 spool.close();
                 LittleFS.remove("/spool.txt");
+                LittleFS.remove("/tmp.txt");
                 Serial.println("[Spool] Fully drained offline spool.");
               }
             } else {

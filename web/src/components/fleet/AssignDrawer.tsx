@@ -169,7 +169,18 @@ export function AssignDrawer({
             </label>
             <select
               value={selectedVehicleId}
-              onChange={(e) => setSelectedVehicleId(e.target.value)}
+              onChange={(e) => {
+                const vId = e.target.value;
+                setSelectedVehicleId(vId);
+                const target = vehicles.find((v) => v.id === vId);
+                if (target) {
+                  setSelectedDeviceId(target.assigned_device_id || '');
+                  setSelectedDriverId(target.assigned_driver_id || '');
+                } else {
+                  setSelectedDeviceId('');
+                  setSelectedDriverId('');
+                }
+              }}
               className="w-full px-3 py-1.5 bg-black border border-zinc-800 rounded-md text-white font-mono focus:outline-none focus:border-zinc-600 transition-colors"
             >
               <option value="">-- Choose Target Vehicle --</option>

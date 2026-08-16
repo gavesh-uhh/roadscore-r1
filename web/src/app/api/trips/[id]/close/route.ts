@@ -41,14 +41,43 @@ export async function POST(
     const startedAtMs = trip.started_at ? new Date(trip.started_at).getTime() : Date.now();
     const durationS = Math.max(0, Math.round((Date.now() - startedAtMs) / 1000));
 
+    // Try to get latest telemetry for this device to capture end location and telemetry_to
+    let endLat = trip.end_lat;
+    let endLon = trip.end_lon;
+    let telemetryTo = trip.telemetry_to;
+
+    if (trip.device_id) {
+      const { data: latestTel } = await supabase
+        .from('telemetry')
+        .select('id, gps')
+        .eq('device_id', trip.device_id)
+        .order('server_received_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestTel) {
+        if (latestTel.id) telemetryTo = latestTel.id;
+        if (latestTel.gps?.lat && latestTel.gps?.lon) {
+          endLat = Number(latestTel.gps.lat);
+          endLon = Number(latestTel.gps.lon);
+        }
+      }
+    }
+
+    const updatePayload: Record<string, any> = {
+      ended_at: nowIso,
+      duration_s: durationS,
+      status: 'closed',
+    };
+
+    if (endLat != null) updatePayload.end_lat = endLat;
+    if (endLon != null) updatePayload.end_lon = endLon;
+    if (telemetryTo != null) updatePayload.telemetry_to = telemetryTo;
+
     // Update trip in Supabase
     const { data: updated, error: updateErr } = await supabase
       .from('trips')
-      .update({
-        ended_at: nowIso,
-        duration_s: durationS,
-        status: 'closed',
-      })
+      .update(updatePayload)
       .eq('id', tripId)
       .select()
       .single();

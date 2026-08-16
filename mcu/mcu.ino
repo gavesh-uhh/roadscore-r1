@@ -1,4 +1,5 @@
 #include "src/globals.h"
+#include "src/gps.h"
 #include "src/uploader.h"
 #include "src/sensors.h"
 #include "src/calibration.h"
@@ -82,8 +83,7 @@ void setup() {
   }
 
   // Configure GPS Serial with enlarged 1024-byte RX buffer
-  GPSSerial.setRxBufferSize(1024);
-  GPSSerial.begin(9600, SERIAL_8N1, pins::GPS_RX, pins::GPS_TX);
+  setupGPS();
 
   connectWiFi();
 

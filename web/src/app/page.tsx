@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Header } from '@/components/common/Header';
 import { MapHexagon, MapMarker, MapPolyline, EventPulse, OSMMap } from '@/components/map/OSMMap';
-import { CockpitHUD } from '@/components/cockpit/CockpitHUD';
+import { CockpitHUD, CockpitAlert, RadarBlip } from '@/components/cockpit/CockpitHUD';
 import { createClient } from '@/lib/supabase/client';
 import {
   useRealtimeStream,
@@ -99,6 +99,7 @@ export default function UnifiedOperationsDesk() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [trips, setTrips] = useState<TripRow[]>([]);
   const [roadCells, setRoadCells] = useState<RoadCellRow[]>([]);
+  const [roadDefects, setRoadDefects] = useState<any[]>([]);
   const [fleetDrivers, setFleetDrivers] = useState<DriverRecord[]>([]);
   const [telematicsEvents, setTelematicsEvents] = useState<TelematicsEvent[]>([]);
   const [decayTicker, setDecayTicker] = useState<number>(0);
@@ -192,12 +193,13 @@ export default function UnifiedOperationsDesk() {
     try {
       // 1. Fetch Drivers, Events, and exact Telemetry count strictly from Supabase DB
       const fleetData = await getFleetData(supabase);
-      const [eventsRes, telRes, tripRes, cellRes, telCountRes] = await Promise.all([
+      const [eventsRes, telRes, tripRes, cellRes, telCountRes, defectsRes] = await Promise.all([
         supabase.from('driving_events').select('*').order('occurred_at', { ascending: false }),
         supabase.from('telemetry').select('*').order('server_received_at', { ascending: false }).limit(100),
         supabase.from('trips').select('*').order('started_at', { ascending: false }).limit(15),
-        supabase.from('road_cells').select('*').limit(40),
+        supabase.from('road_cells').select('*').limit(60),
         supabase.from('telemetry').select('*', { count: 'exact', head: true }),
+        supabase.from('road_defects').select('*').limit(50),
       ]);
 
       if (fleetData.drivers) {
@@ -205,6 +207,9 @@ export default function UnifiedOperationsDesk() {
       }
       if (telCountRes.count != null) {
         setTotalTelemetryCount(telCountRes.count);
+      }
+      if (defectsRes.data) {
+        setRoadDefects(defectsRes.data);
       }
 
       const rawEvents = eventsRes.data || [];
@@ -251,6 +256,7 @@ export default function UnifiedOperationsDesk() {
             ts: String(r.ts || r.server_received_at || ''),
             server_received_at: String(r.server_received_at || r.ts || ''),
             gps: r.gps || null,
+            accel_cal: r.accel_cal || null,
           }))
         );
 
@@ -460,37 +466,38 @@ export default function UnifiedOperationsDesk() {
   }
 
   // Build H3 Hexagons directly from DB road_cells
-  const mapHexagons: MapHexagon[] = roadCells.map((cell) => {
-    let color = '#22c55e';
-    if (cell.roughness_index >= 75) color = '#ef4444';
-    else if (cell.roughness_index >= 50) color = '#f97316';
-    else if (cell.roughness_index >= 25) color = '#eab308';
+  const mapHexagons: MapHexagon[] = useMemo(() => {
+    const list: MapHexagon[] = [];
+    for (const cell of roadCells) {
+      if (!cell.h3_12) continue;
+      let boundary: [number, number][] = [];
+      try {
+        boundary = cellToBoundary(cell.h3_12);
+      } catch {
+        continue;
+      }
+      if (!boundary || boundary.length === 0) continue;
 
-    let boundary: [number, number][] = [];
-    try {
-      boundary = cellToBoundary(cell.h3_12);
-    } catch {
-      boundary = [
-        [6.915, 79.852],
-        [6.916, 79.854],
-        [6.915, 79.856],
-        [6.914, 79.854],
-      ];
+      let color = '#22c55e';
+      if (cell.roughness_index >= 75) color = '#ef4444';
+      else if (cell.roughness_index >= 50) color = '#f97316';
+      else if (cell.roughness_index >= 25) color = '#eab308';
+
+      list.push({
+        id: cell.h3_12,
+        boundary,
+        color,
+        fillOpacity: 0.35,
+        roughnessIndex: cell.roughness_index,
+        passCount: cell.pass_count,
+        spikeCount: cell.spike_count,
+        speedP85: cell.speed_p85_kmh,
+        defectConfidence: cell.defect_confidence,
+        tooltipText: `H3 Index: ${cell.h3_12} | Roughness: ${cell.roughness_index.toFixed(1)}/100`,
+      });
     }
-
-    return {
-      id: cell.h3_12,
-      boundary,
-      color,
-      fillOpacity: 0.35,
-      roughnessIndex: cell.roughness_index,
-      passCount: cell.pass_count,
-      spikeCount: cell.spike_count,
-      speedP85: cell.speed_p85_kmh,
-      defectConfidence: cell.defect_confidence,
-      tooltipText: `H3 Index: ${cell.h3_12} | Roughness: ${cell.roughness_index.toFixed(1)}/100`,
-    };
-  });
+    return list;
+  }, [roadCells]);
 
   // Active device telemetry for Live Cockpit Digital Twin
   const activeDeviceTel = useMemo(() => {
@@ -501,10 +508,94 @@ export default function UnifiedOperationsDesk() {
     return telemetry[0] || null;
   }, [activeDriver, telemetry]);
 
-  const activeSpeed = Number(activeDeviceTel?.gps?.speed_kmh || (activeDriver?.active_trip_id ? 48.5 : 0));
-  const activeHeading = Number(activeDeviceTel?.gps?.heading || 180);
-  const activeVertG = Number(activeDeviceTel?.accel_cal?.vertical_rms || 1.02);
-  const activeHorizG = Number(activeDeviceTel?.accel_cal?.horizontal_peak || 0.08);
+  const activeSpeed = activeDeviceTel?.gps?.speed_kmh != null ? Number(activeDeviceTel.gps.speed_kmh) : 0;
+  const activeHeading = activeDeviceTel?.gps?.heading != null ? Number(activeDeviceTel.gps.heading) : 0;
+  const activeVertG = activeDeviceTel?.accel_cal?.vertical_rms != null ? Number(activeDeviceTel.accel_cal.vertical_rms) : 1.0;
+  const activeHorizG = activeDeviceTel?.accel_cal?.horizontal_peak != null ? Number(activeDeviceTel.accel_cal.horizontal_peak) : 0.0;
+
+  // Real-time Lookahead Hazard Alert and Radar Blips computed dynamically from road defects and vehicle position
+  const { cockpitAlert, cockpitRadarBlips, cockpitAdvisorySpeed } = useMemo(() => {
+    const vehicleLat = activeDeviceTel?.gps?.lat;
+    const vehicleLon = activeDeviceTel?.gps?.lon;
+
+    if (!vehicleLat || !vehicleLon) {
+      return { cockpitAlert: null, cockpitRadarBlips: [], cockpitAdvisorySpeed: null };
+    }
+
+    const blips: RadarBlip[] = [];
+    let alert: CockpitAlert | null = null;
+    let advisorySpeed: number | null = null;
+
+    // 1. Check known confirmed road defects
+    for (const d of roadDefects) {
+      if (!d.lat || !d.lon) continue;
+      const dLat = (d.lat - vehicleLat) * 111320;
+      const dLon = (d.lon - vehicleLon) * 111320 * Math.cos((vehicleLat * Math.PI) / 180);
+      const distM = Math.sqrt(dLat * dLat + dLon * dLon);
+
+      if (distM <= 220) {
+        const bearingDeg = (Math.atan2(dLon, dLat) * 180) / Math.PI;
+        let relAngle = bearingDeg - activeHeading;
+        while (relAngle > 180) relAngle -= 360;
+        while (relAngle < -180) relAngle += 360;
+
+        if (Math.abs(relAngle) <= 45) {
+          blips.push({
+            id: `defect-${d.id}`,
+            distanceM: distM,
+            angleDeg: Math.max(-30, Math.min(30, relAngle)),
+            severity: d.severity || 'high',
+            type: 'road.pothole_impact',
+            title: d.severity === 'critical' ? 'Severe Pothole' : 'Road Defect',
+          });
+
+          if (distM <= 180 && Math.abs(relAngle) <= 25 && (!alert || distM < alert.distanceM)) {
+            const eta = activeSpeed > 5 ? distM / (activeSpeed / 3.6) : distM / 5;
+            const safeSpeed = d.severity === 'critical' ? 25 : 35;
+            alert = {
+              id: `alert-${d.id}`,
+              title: d.severity === 'critical' ? 'Severe Hazard Ahead' : 'Rough Surface Ahead',
+              type: 'road.hazard_ahead',
+              severity: d.severity || 'high',
+              distanceM: distM,
+              etaS: Math.min(15, Math.max(0.5, eta)),
+              advisorySpeedKmh: safeSpeed,
+            };
+            advisorySpeed = safeSpeed;
+          }
+        }
+      }
+    }
+
+    // 2. Check active driving events nearby
+    if (!alert && events.length > 0) {
+      const nearEvent = events.find((e) => {
+        if (!e.lat || !e.lon) return false;
+        const dLat = (e.lat - vehicleLat) * 111320;
+        const dLon = (e.lon - vehicleLon) * 111320 * Math.cos((vehicleLat * Math.PI) / 180);
+        return Math.sqrt(dLat * dLat + dLon * dLon) < 80;
+      });
+
+      if (nearEvent) {
+        alert = {
+          id: `alert-event-${nearEvent.event_key}`,
+          title: String(nearEvent.type || 'Incident').replace(/_/g, ' ').toUpperCase(),
+          type: nearEvent.type,
+          severity: nearEvent.severity || 'medium',
+          distanceM: 40,
+          etaS: activeSpeed > 5 ? 40 / (activeSpeed / 3.6) : 3.0,
+          advisorySpeedKmh: 35,
+        };
+        advisorySpeed = 35;
+      }
+    }
+
+    return {
+      cockpitAlert: alert,
+      cockpitRadarBlips: blips.slice(0, 6),
+      cockpitAdvisorySpeed: advisorySpeed,
+    };
+  }, [activeDeviceTel, activeHeading, activeSpeed, roadDefects, events]);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-black text-white font-sans text-xs">
@@ -786,30 +877,9 @@ export default function UnifiedOperationsDesk() {
                     speedKmh={activeSpeed}
                     heading={activeHeading}
                     gForce={{ vertical: activeVertG, lateral: activeHorizG }}
-                    activeAlert={
-                      activeSpeed > 40 && roadCells.some((c) => c.roughness_index > 50)
-                        ? {
-                            id: 'live-hazard-alert',
-                            title: 'High Roughness Ahead',
-                            type: 'road.rough_segment_ahead',
-                            severity: 'high',
-                            distanceM: 110,
-                            etaS: 5.4,
-                            advisorySpeedKmh: 35,
-                          }
-                        : null
-                    }
-                    radarBlips={roadCells
-                      .filter((c) => c.roughness_index >= 40)
-                      .slice(0, 4)
-                      .map((c, i) => ({
-                        id: `radar-cell-${c.h3_12}`,
-                        distanceM: 45 + i * 40,
-                        angleDeg: i % 2 === 0 ? 12 : -14,
-                        severity: c.roughness_index >= 75 ? 'critical' : 'high',
-                        type: 'road.pothole_impact',
-                        title: `Rough H3 Cell (${c.roughness_index.toFixed(0)})`,
-                      }))}
+                    activeAlert={cockpitAlert}
+                    radarBlips={cockpitRadarBlips}
+                    advisorySpeedKmh={cockpitAdvisorySpeed}
                     isLive={true}
                     vehicleName={activeDriver?.assigned_device_id || 'ROADSCORE_FLEET_01'}
                     driverName={activeDriver?.full_name}

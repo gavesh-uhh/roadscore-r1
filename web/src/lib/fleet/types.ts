@@ -19,6 +19,11 @@ export interface VehicleRecord {
   assigned_driver_id?: string | null;
   assigned_driver_name?: string | null;
   assigned_device_id?: string | null;
+  // Computed utilization metrics from public.trips
+  total_distance_km?: number;
+  total_trips?: number;
+  active_trip_id?: string | null;
+  is_active_moving?: boolean;
 }
 
 export interface DeviceRecord {

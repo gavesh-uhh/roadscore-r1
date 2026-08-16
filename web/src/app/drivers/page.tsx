@@ -18,6 +18,8 @@ import {
   Calendar,
   X,
   Navigation,
+  ArrowUpDown,
+  Filter,
 } from 'lucide-react';
 import {
   ScatterChart,
@@ -62,6 +64,8 @@ interface DriverRow extends DriverRecord {
 export default function DriversLeaderboard() {
   const [activeTab, setActiveTab] = useState<'leaderboard' | 'matrix'>('leaderboard');
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState<'score_desc' | 'score_asc' | 'distance' | 'trips' | 'name'>('score_desc');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'in_trip' | 'idle' | 'unassigned'>('all');
   const [drivers, setDrivers] = useState<DriverRow[]>([]);
   const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
@@ -84,15 +88,13 @@ export default function DriversLeaderboard() {
       setDevices(fleet.devices);
 
       // Fetch dynamic trips, telematics events, and canonical engine scores
-      const [tripsRes, eventsRes, telemetryRes, scoresRes] = await Promise.all([
+      const [tripsRes, eventsRes, telemetryRes] = await Promise.all([
         supabase.from('trips').select('*').order('started_at', { ascending: false }),
         supabase.from('driving_events').select('*'),
         supabase.from('telemetry').select('device_id, accel_cal').order('server_received_at', { ascending: false }).limit(200),
-        supabase.from('scores').select('*').order('period_end', { ascending: false }),
       ]);
 
       const allTrips = tripsRes.data || [];
-      const allScores = scoresRes.data || [];
       const allEvents: TelematicsEvent[] = (eventsRes.data || []).map((e: any) => ({
         id: e.id,
         event_key: e.event_key,
@@ -123,13 +125,6 @@ export default function DriversLeaderboard() {
         );
         const driverEvents = allEvents.filter(
           (e) => e.driver_id === d.id || (assignedDev && e.device_id === assignedDev)
-        );
-
-        // Check canonical engine score first
-        const canonicalScoreRow = allScores.find(
-          (s: any) =>
-            (s.subject_type === 'driver' && s.subject_id === d.id) ||
-            (assignedDev && s.subject_type === 'device' && s.subject_id === assignedDev)
         );
 
         // Find current active trip if any
@@ -197,6 +192,9 @@ export default function DriversLeaderboard() {
 
     const channel = supabase
       .channel('drivers_leaderboard_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => loadData(false))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'driving_events' }, () => loadData(false))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => loadData(false))
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'telemetry' }, () => loadData(false))
@@ -213,17 +211,31 @@ export default function DriversLeaderboard() {
   }, [loadData, supabase]);
 
   const filteredDrivers = useMemo(() => {
-    return drivers.filter((d) => {
-      const q = searchTerm.toLowerCase();
-      const matchesSearch =
-        d.name.toLowerCase().includes(q) ||
-        (d.licence_ref && d.licence_ref.toLowerCase().includes(q)) ||
-        (d.assigned_vehicle_plate && d.assigned_vehicle_plate.toLowerCase().includes(q)) ||
-        (d.assigned_device_id && d.assigned_device_id.toLowerCase().includes(q));
+    return drivers
+      .filter((d) => {
+        const q = searchTerm.toLowerCase();
+        const matchesSearch =
+          d.name.toLowerCase().includes(q) ||
+          (d.licence_ref && d.licence_ref.toLowerCase().includes(q)) ||
+          (d.assigned_vehicle_plate && d.assigned_vehicle_plate.toLowerCase().includes(q)) ||
+          (d.assigned_device_id && d.assigned_device_id.toLowerCase().includes(q));
 
-      return matchesSearch;
-    });
-  }, [drivers, searchTerm]);
+        if (!matchesSearch) return false;
+
+        if (statusFilter === 'in_trip') return !!d.active_trip;
+        if (statusFilter === 'idle') return !d.active_trip && !!d.assigned_vehicle_id;
+        if (statusFilter === 'unassigned') return !d.assigned_vehicle_id;
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortBy === 'score_desc') return b.score24h - a.score24h;
+        if (sortBy === 'score_asc') return a.score24h - b.score24h;
+        if (sortBy === 'distance') return b.total_distance_km - a.total_distance_km;
+        if (sortBy === 'trips') return b.total_trips - a.total_trips;
+        if (sortBy === 'name') return a.name.localeCompare(b.name);
+        return 0;
+      });
+  }, [drivers, searchTerm, statusFilter, sortBy]);
 
   const scatterData = useMemo(() => {
     return filteredDrivers.map((d) => ({
@@ -399,28 +411,69 @@ export default function DriversLeaderboard() {
 
         {/* Filter Controls & Action Bar */}
         <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="relative flex-1 max-w-md">
-            <Search size={13} className="absolute left-3 top-2.5 text-zinc-500" />
-            <input
-              type="text"
-              placeholder="Search driver name, license, vehicle plate, device..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-black text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-700 pl-8 pr-8 py-1.5 rounded-md border border-zinc-800 w-full font-mono transition-colors"
-            />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
-                className="absolute right-2.5 top-2.5 text-zinc-500 hover:text-white"
+          <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[280px]">
+            <div className="relative flex-1 max-w-xs">
+              <Search size={13} className="absolute left-3 top-2.5 text-zinc-500" />
+              <input
+                type="text"
+                placeholder="Search name, license, plate, device..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="bg-black text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-700 pl-8 pr-8 py-1.5 rounded-md border border-zinc-800 w-full font-mono transition-colors"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2.5 top-2.5 text-zinc-500 hover:text-white"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {/* Status Filter Buttons */}
+            <div className="inline-flex rounded-md bg-black p-0.5 border border-zinc-800 text-xs">
+              {(['all', 'in_trip', 'idle', 'unassigned'] as const).map((st) => (
+                <button
+                  key={st}
+                  onClick={() => setStatusFilter(st)}
+                  className={`px-2.5 py-1 rounded text-[11px] font-mono transition-colors ${
+                    statusFilter === st
+                      ? 'bg-zinc-800 text-white font-semibold'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {st === 'all'
+                    ? 'All'
+                    : st === 'in_trip'
+                    ? 'In Trip'
+                    : st === 'idle'
+                    ? 'Idle'
+                    : 'Unassigned'}
+                </button>
+              ))}
+            </div>
+
+            {/* Sort Dropdown */}
+            <div className="flex items-center gap-1.5 bg-black px-2 py-1 rounded-md border border-zinc-800 text-xs text-zinc-400">
+              <ArrowUpDown size={12} className="text-zinc-500" />
+              <select
+                value={sortBy}
+                onChange={(e: any) => setSortBy(e.target.value)}
+                className="bg-transparent text-[11px] text-zinc-200 font-mono focus:outline-none cursor-pointer"
               >
-                <X size={12} />
-              </button>
-            )}
+                <option value="score_desc" className="bg-zinc-950 text-white">Score: Safest First</option>
+                <option value="score_asc" className="bg-zinc-950 text-white">Score: At Risk First</option>
+                <option value="distance" className="bg-zinc-950 text-white">Most Distance</option>
+                <option value="trips" className="bg-zinc-950 text-white">Most Trips</option>
+                <option value="name" className="bg-zinc-950 text-white">Name: A to Z</option>
+              </select>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
             <span className="text-zinc-400 text-xs font-mono">
-              Showing <strong className="text-white">{filteredDrivers.length}</strong> of {drivers.length} drivers
+              Showing <strong className="text-white">{filteredDrivers.length}</strong> of {drivers.length}
             </span>
 
             <button
@@ -443,6 +496,7 @@ export default function DriversLeaderboard() {
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="bg-zinc-900/60 text-zinc-400 border-b border-zinc-800 text-[11px] uppercase tracking-wider font-semibold font-mono">
+                    <th className="px-3.5 py-2.5 w-12 text-center">#</th>
                     <th className="px-3.5 py-2.5">Driver Name</th>
                     <th className="px-3.5 py-2.5">License Ref</th>
                     <th className="px-3.5 py-2.5">Assigned Vehicle</th>
@@ -456,22 +510,33 @@ export default function DriversLeaderboard() {
                 <tbody className="divide-y divide-zinc-900 text-zinc-300 font-sans">
                   {loading ? (
                     <tr>
-                      <td colSpan={8} className="p-8 text-center text-zinc-500 font-mono">
+                      <td colSpan={9} className="p-8 text-center text-zinc-500 font-mono">
                         Loading driver roster...
                       </td>
                     </tr>
                   ) : filteredDrivers.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="p-8 text-center text-zinc-500 font-mono">
-                        No driver records found matching search.
+                      <td colSpan={9} className="p-8 text-center text-zinc-500 font-mono">
+                        No driver records found matching search or filter.
                       </td>
                     </tr>
                   ) : (
-                    filteredDrivers.map((d) => (
+                    filteredDrivers.map((d, idx) => (
                       <tr key={d.id} className="hover:bg-zinc-900/50 transition-colors">
+                        {/* Rank */}
+                        <td className="px-3.5 py-2 text-center font-mono font-bold text-zinc-500 text-[11px]">
+                          {idx + 1}
+                        </td>
+
                         {/* Driver Name */}
                         <td className="px-3.5 py-2 font-semibold text-white whitespace-nowrap">
-                          {d.name}
+                          <Link
+                            href={`/drivers/${d.id}`}
+                            className="hover:text-emerald-400 transition-colors inline-flex items-center gap-1.5"
+                          >
+                            <span>{d.name}</span>
+                            <ArrowRight size={11} className="text-zinc-500 hover:text-emerald-400" />
+                          </Link>
                         </td>
 
                         {/* License Ref */}
@@ -576,10 +641,10 @@ export default function DriversLeaderboard() {
 
                             <Link
                               href={`/drivers/${d.id}`}
-                              className="px-2 py-0.5 rounded-md bg-zinc-900 text-white border border-zinc-800 font-medium text-xs hover:bg-zinc-800 transition-colors inline-flex items-center gap-1"
+                              className="px-2 py-0.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-sm text-zinc-300 hover:text-white inline-flex items-center gap-1 transition-colors font-semibold text-[10px]"
                             >
                               <span>Scorecard</span>
-                              <ArrowRight size={11} />
+                              <ArrowRight size={10} />
                             </Link>
                           </div>
                         </td>
@@ -591,52 +656,95 @@ export default function DriversLeaderboard() {
             </div>
           </div>
         ) : (
-          <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-5 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between">
+          /* Risk vs Roughness Scatter Plot Matrix */
+          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
               <div>
-                <h3 className="text-xs font-semibold text-white uppercase tracking-wider font-mono">
-                  Risk Scatter Matrix
+                <h3 className="font-bold text-white text-xs">
+                  Driver Operational Risk vs. Road Roughness Matrix
                 </h3>
-                <p className="text-[11px] text-zinc-400 mt-0.5">
-                  Correlation of road roughness (m/s² RMS) against penalty anomaly frequency (incidents / 100km)
+                <p className="text-zinc-400 text-[11px]">
+                  Fairness arbitration quadrant isolating road condition vibrations from driver behavioral deductions.
                 </p>
               </div>
-              <span className="text-[10px] font-mono text-zinc-500">
-                Bubble Size = Driver Safety Index
-              </span>
+              <div className="flex items-center gap-4 text-[11px] font-mono">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                  <span>Low Risk (≥90)</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  <span>Moderate (75-89)</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-400" />
+                  <span>Critical Risk (&lt;75)</span>
+                </span>
+              </div>
             </div>
 
-            <div className="h-80 w-full pt-2">
+            <div className="h-96 w-full pt-4">
               <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 10 }}>
                   <XAxis
+                    type="number"
                     dataKey="roadRoughness"
-                    name="Road Roughness Index"
+                    name="Road Roughness"
+                    unit=" m/s²"
                     stroke="#52525b"
-                    tick={{ fontSize: 10 }}
-                    unit=" RMS"
-                  />
-                  <YAxis
-                    dataKey="eventRate"
-                    name="Incidents / 100km"
-                    stroke="#52525b"
-                    tick={{ fontSize: 10 }}
-                    unit=" /100km"
-                  />
-                  <ZAxis dataKey="score" range={[60, 200]} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#09090b',
-                      borderColor: '#27272a',
-                      borderRadius: '6px',
-                      fontSize: '11px',
+                    tick={{ fill: '#71717a', fontSize: 11, fontFamily: 'monospace' }}
+                    label={{
+                      value: 'Road Surface Roughness (Vertical RMS m/s²)',
+                      position: 'insideBottom',
+                      offset: -10,
+                      fill: '#a1a1aa',
+                      fontSize: 11,
                     }}
                   />
-                  <Scatter data={scatterData} fill="#10b981">
+                  <YAxis
+                    type="number"
+                    dataKey="eventRate"
+                    name="Incident Rate"
+                    unit=" /100km"
+                    stroke="#52525b"
+                    tick={{ fill: '#71717a', fontSize: 11, fontFamily: 'monospace' }}
+                    label={{
+                      value: 'Driver-Attributed Incidents / 100km',
+                      angle: -90,
+                      position: 'insideLeft',
+                      fill: '#a1a1aa',
+                      fontSize: 11,
+                    }}
+                  />
+                  <ZAxis type="number" range={[100, 400]} />
+                  <Tooltip
+                    cursor={{ strokeDasharray: '3 3', stroke: '#3f3f46' }}
+                    content={({ payload }) => {
+                      if (!payload || !payload.length) return null;
+                      const data = payload[0].payload;
+                      return (
+                        <div className="bg-black border border-zinc-700 rounded-md p-3 text-xs shadow-xl space-y-1 font-mono">
+                          <p className="font-bold text-white text-xs">{data.name}</p>
+                          <div className="border-t border-zinc-800 pt-1 space-y-0.5 text-zinc-300">
+                            <p>Safety Score: <strong className={data.score >= 90 ? 'text-emerald-400' : data.score >= 75 ? 'text-amber-400' : 'text-rose-400'}>{data.score.toFixed(1)}</strong></p>
+                            <p>Road Roughness: {data.roadRoughness} m/s²</p>
+                            <p>Violation Rate: {data.eventRate} /100km</p>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Scatter name="Drivers" data={scatterData}>
                     {scatterData.map((entry, index) => (
                       <Cell
                         key={`cell-${index}`}
-                        fill={entry.score >= 90 ? '#10b981' : entry.score >= 75 ? '#f59e0b' : '#ef4444'}
+                        fill={
+                          entry.score >= 90
+                            ? '#34d399'
+                            : entry.score >= 75
+                            ? '#fbbf24'
+                            : '#f87171'
+                        }
                       />
                     ))}
                   </Scatter>
@@ -646,6 +754,19 @@ export default function DriversLeaderboard() {
           </div>
         )}
       </div>
+
+      {/* Driver Registration & Edit Drawer */}
+      <DriverDrawer
+        isOpen={driverDrawerOpen}
+        onClose={() => {
+          setDriverDrawerOpen(false);
+          setEditingDriver(null);
+        }}
+        driver={editingDriver}
+        vehicles={vehicles}
+        onSave={handleSaveDriver}
+        onDelete={handleDeleteDriver}
+      />
 
       {/* Score Audit Slide-over Drawer */}
       {auditDriver && (
@@ -669,4 +790,3 @@ export default function DriversLeaderboard() {
     </div>
   );
 }
-

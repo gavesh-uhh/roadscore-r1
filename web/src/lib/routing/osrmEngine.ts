@@ -1,4 +1,4 @@
-import { latLngToCell } from 'h3-js';
+import { latLngToCell, gridDisk } from 'h3-js';
 
 export type PresetType = 'safe' | 'fast' | 'balanced';
 
@@ -213,7 +213,7 @@ function evaluateRoute(
       // If exact 3.3m cell has no data, check 1-ring neighbors (10m radius)
       if (!matched) {
         try {
-          const neighbors = require('h3-js').gridDisk(h3Index, 1);
+          const neighbors = gridDisk(h3Index, 1);
           for (const n of neighbors) {
             const found = cellMap.get(n);
             if (found) {

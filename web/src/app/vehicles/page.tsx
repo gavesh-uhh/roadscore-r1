@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import Link from 'next/link';
 import {
   Car,
   Plus,
@@ -12,6 +13,9 @@ import {
   Trash2,
   Layers,
   Radio,
+  Route,
+  Activity,
+  ArrowRight,
 } from 'lucide-react';
 import { Header } from '@/components/common/Header';
 import { createClient } from '@/lib/supabase/client';
@@ -48,9 +52,9 @@ export default function VehiclesPage() {
 
   const supabase = useMemo(() => createClient(), []);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (isInitial = false) => {
     try {
-      setLoading(true);
+      if (isInitial) setLoading(true);
       const data = await getFleetData(supabase);
       setVehicles(data.vehicles);
       setDrivers(data.drivers);
@@ -58,19 +62,38 @@ export default function VehiclesPage() {
     } catch (err) {
       console.error('Error loading fleet data:', err);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   }, [supabase]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    loadData(true);
+
+    const channel = supabase
+      .channel('vehicles_fleet_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => loadData(false))
+      .subscribe();
+
+    const interval = setInterval(() => {
+      loadData(false);
+    }, 3000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
+  }, [loadData, supabase]);
 
   // Metric computations
   const totalVehicles = vehicles.length;
   const equippedCount = vehicles.filter((v) => v.assigned_device_id).length;
-  const assignedDriverCount = vehicles.filter((v) => v.assigned_driver_id).length;
-  const activeDeviceCount = devices.filter((d) => d.active).length;
+  const activeMovingCount = vehicles.filter((v) => v.is_active_moving).length;
+  const totalFleetDistanceKm = vehicles
+    .reduce((acc, v) => acc + (v.total_distance_km || 0), 0)
+    .toFixed(1);
 
   // Filtered vehicles
   const filteredVehicles = useMemo(() => {
@@ -136,7 +159,7 @@ export default function VehiclesPage() {
     <div className="flex flex-col min-h-screen bg-black text-white font-sans text-xs">
       <Header
         title="Fleet Vehicle Registry"
-        subtitle="Commercial fleet assets, telematics pairings, and driver allocations"
+        subtitle="Commercial fleet assets, telematics pairings, and live telemetry tracking"
       />
 
       <div className="p-5 space-y-4 w-full">
@@ -153,10 +176,26 @@ export default function VehiclesPage() {
 
           <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3.5 space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] text-zinc-400 font-medium">Telematics Equipped</span>
-              <Cpu size={14} className="text-emerald-400" />
+              <span className="text-[11px] text-zinc-400 font-medium flex items-center gap-1.5">
+                <span>Active in Motion</span>
+                {activeMovingCount > 0 && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                )}
+              </span>
+              <Activity size={14} className="text-emerald-400" />
             </div>
             <p className="text-xl font-bold font-mono text-emerald-400">
+              {activeMovingCount} <span className="text-xs text-zinc-500 font-sans">/ {totalVehicles}</span>
+            </p>
+            <p className="text-zinc-500 text-[10px]">Vehicles with active trip sessions</p>
+          </div>
+
+          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3.5 space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-zinc-400 font-medium">Telematics Equipped</span>
+              <Cpu size={14} className="text-blue-400" />
+            </div>
+            <p className="text-xl font-bold font-mono text-white">
               {equippedCount} <span className="text-xs text-zinc-500 font-sans">/ {totalVehicles}</span>
             </p>
             <p className="text-zinc-500 text-[10px]">Active hardware units installed</p>
@@ -164,22 +203,13 @@ export default function VehiclesPage() {
 
           <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3.5 space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] text-zinc-400 font-medium">Assigned Drivers</span>
-              <UserCheck size={14} className="text-blue-400" />
+              <span className="text-[11px] text-zinc-400 font-medium">Verified Fleet Odometer</span>
+              <Route size={14} className="text-emerald-400" />
             </div>
             <p className="text-xl font-bold font-mono text-white">
-              {assignedDriverCount} <span className="text-xs text-zinc-500 font-sans">/ {totalVehicles}</span>
+              {totalFleetDistanceKm} <span className="text-xs text-zinc-500 font-sans">km</span>
             </p>
-            <p className="text-zinc-500 text-[10px]">Allocated to registered operators</p>
-          </div>
-
-          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3.5 space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-zinc-400 font-medium">Active Devices</span>
-              <Radio size={14} className="text-emerald-400" />
-            </div>
-            <p className="text-xl font-bold font-mono text-white">{activeDeviceCount}</p>
-            <p className="text-zinc-500 text-[10px]">Ready for ingestion pipeline</p>
+            <p className="text-zinc-500 text-[10px]">Cumulative distance across trips</p>
           </div>
         </div>
 
@@ -216,23 +246,24 @@ export default function VehiclesPage() {
             <thead>
               <tr className="bg-zinc-900/60 border-b border-zinc-800 text-zinc-400 uppercase text-[11px] font-semibold tracking-wider font-mono">
                 <th className="p-3">Vehicle Plate</th>
+                <th className="p-3">Status</th>
                 <th className="p-3">Make & Model</th>
-                <th className="p-3">Model Year</th>
-                <th className="p-3">Assigned Hardware Unit</th>
+                <th className="p-3">Assigned Unit</th>
                 <th className="p-3">Assigned Driver</th>
+                <th className="p-3">Verified Distance</th>
                 <th className="p-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-900 text-zinc-300">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-zinc-500 font-mono">
+                  <td colSpan={7} className="p-8 text-center text-zinc-500 font-mono">
                     Loading commercial fleet registry...
                   </td>
                 </tr>
               ) : filteredVehicles.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-zinc-500 font-mono">
+                  <td colSpan={7} className="p-8 text-center text-zinc-500 font-mono">
                     No vehicles found matching current criteria.
                   </td>
                 </tr>
@@ -250,23 +281,45 @@ export default function VehiclesPage() {
                         </div>
                       </td>
 
+                      {/* Operational Status */}
+                      <td className="p-3">
+                        {vehicle.is_active_moving ? (
+                          <Link
+                            href={vehicle.active_trip_id ? `/trips/${vehicle.active_trip_id}` : '/trips'}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-400 font-mono text-[10px] font-semibold hover:border-emerald-400 transition-colors"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>In Trip</span>
+                            <ArrowRight size={10} />
+                          </Link>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-500 font-mono text-[10px]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-zinc-600" />
+                            <span>Parked / Idle</span>
+                          </span>
+                        )}
+                      </td>
+
                       {/* Make & Model */}
                       <td className="p-3 text-zinc-300">
                         <span>{vehicle.make || 'Generic'} {vehicle.model || ''}</span>
-                      </td>
-
-                      {/* Year */}
-                      <td className="p-3 font-mono text-zinc-400">
-                        {vehicle.year ? vehicle.year : '—'}
+                        {vehicle.year && (
+                          <span className="text-zinc-500 ml-1.5 font-mono text-[11px]">
+                            ({vehicle.year})
+                          </span>
+                        )}
                       </td>
 
                       {/* Installed Device */}
                       <td className="p-3 font-mono">
                         {vehicle.assigned_device_id ? (
-                          <span className="px-1.5 py-0.5 rounded-sm bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 font-semibold text-[11px] flex items-center gap-1 w-fit">
+                          <Link
+                            href={`/hardware/${vehicle.assigned_device_id}`}
+                            className="px-1.5 py-0.5 rounded-sm bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 font-semibold text-[11px] inline-flex items-center gap-1 hover:border-emerald-400 transition-colors"
+                          >
                             <Cpu size={11} />
                             {vehicle.assigned_device_id}
-                          </span>
+                          </Link>
                         ) : (
                           <span className="text-zinc-500 text-[11px]">Unbound</span>
                         )}
@@ -274,13 +327,32 @@ export default function VehiclesPage() {
 
                       {/* Assigned Driver */}
                       <td className="p-3">
-                        {vehicle.assigned_driver_name ? (
+                        {vehicle.assigned_driver_name && vehicle.assigned_driver_id ? (
+                          <Link
+                            href={`/drivers/${vehicle.assigned_driver_id}`}
+                            className="text-zinc-200 font-medium hover:text-emerald-400 transition-colors"
+                          >
+                            {vehicle.assigned_driver_name}
+                          </Link>
+                        ) : vehicle.assigned_driver_name ? (
                           <span className="text-zinc-200 font-medium">
                             {vehicle.assigned_driver_name}
                           </span>
                         ) : (
                           <span className="text-zinc-500 text-[11px]">Unassigned</span>
                         )}
+                      </td>
+
+                      {/* Verified Distance & Trip Count */}
+                      <td className="p-3 font-mono">
+                        <div className="flex flex-col">
+                          <span className="text-white font-medium text-[11px]">
+                            {vehicle.total_distance_km !== undefined ? `${vehicle.total_distance_km} km` : '0.0 km'}
+                          </span>
+                          <span className="text-zinc-500 text-[10px]">
+                            {vehicle.total_trips || 0} {(vehicle.total_trips === 1) ? 'trip' : 'trips'}
+                          </span>
+                        </div>
                       </td>
 
                       {/* Actions */}

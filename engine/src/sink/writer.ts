@@ -208,6 +208,7 @@ export class PgSink implements Sink {
       event_key: e.eventKey,
       trip_id: e.tripId,
       device_id: e.deviceId,
+      driver_id: e.driverId ?? null,
       type: e.type,
       category: e.category,
       severity: e.severity,
@@ -236,6 +237,7 @@ export class PgSink implements Sink {
     await tx`
       insert into driving_events ${tx(rows)}
       on conflict (event_key) do update set
+        driver_id = excluded.driver_id,
         type = excluded.type,
         category = excluded.category,
         severity = excluded.severity,

@@ -2,21 +2,27 @@
 
 import { use, useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Header } from '@/components/common/Header';
 import {
   calculateContinuousScore24h,
   calculateFactorRadarScores,
   calculateDriverDeductions,
   generateScoreTimeline,
+  getExcludedEvents,
   TelematicsEvent,
   DeductionItem,
+  ExcludedEventItem,
 } from '@/lib/scoring/continuousEngine';
 import { formatEventType } from '@/lib/events/format';
 import { createClient } from '@/lib/supabase/client';
+import { getFleetData, updateDriver, deleteDriver } from '@/lib/fleet/api';
+import { VehicleRecord } from '@/lib/fleet/types';
+import { DriverDrawer } from '@/components/fleet/DriverDrawer';
+import { ScoreAuditDrawer } from '@/components/scoring/ScoreAuditDrawer';
 import {
   ArrowLeft,
   ArrowRight,
-  Activity,
   ShieldCheck,
   AlertTriangle,
   Cpu,
@@ -25,6 +31,12 @@ import {
   Navigation,
   CheckCircle2,
   TrendingUp,
+  Edit2,
+  FileText,
+  Route,
+  Activity,
+  ShieldAlert,
+  Sparkles,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -51,24 +63,35 @@ const FACTOR_META: Record<string, { label: string; desc: string }> = {
   cornering: { label: 'Cornering & Lateral', desc: 'Turn stability, swerving, lateral Gs' },
   speedCompliance: { label: 'Speed Compliance', desc: 'Adherence to road speed limits' },
   roadRiskAdaptation: { label: 'Road Risk Adaptation', desc: 'Pothole & road shock mitigation' },
-  fatigueEco: { label: 'Eco & Operational Habits', desc: 'Excessive idle & depot maneuvering' },
+  fatigueEco: { label: 'Eco & Operational Habits', desc: 'Excessive idle & continuous driving' },
 };
 
 export default function DriverScorecard({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const driverId = resolvedParams.id;
+  const router = useRouter();
 
   const [driver, setDriver] = useState<any>(null);
   const [device, setDevice] = useState<any>(null);
   const [vehicle, setVehicle] = useState<any>(null);
+  const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
   const [activeTrip, setActiveTrip] = useState<ActiveTripSummary | null>(null);
   const [events, setEvents] = useState<TelematicsEvent[]>([]);
   const [timelineData, setTimelineData] = useState<{ hour: string; score: number }[]>([]);
   const [deductions, setDeductions] = useState<DeductionItem[]>([]);
+  const [excludedEvents, setExcludedEvents] = useState<ExcludedEventItem[]>([]);
   const [currentScore, setCurrentScore] = useState<number>(100.0);
+  const [totalDistanceKm, setTotalDistanceKm] = useState<number>(0);
+  const [totalTripsCount, setTotalTripsCount] = useState<number>(0);
+  const [totalMovingHours, setTotalMovingHours] = useState<number>(0);
+  const [roadRoughness, setRoadRoughness] = useState<number>(0.15);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+
+  // Drawer modal states
+  const [driverDrawerOpen, setDriverDrawerOpen] = useState(false);
+  const [scoreAuditOpen, setScoreAuditOpen] = useState(false);
 
   const supabase = useMemo(() => createClient(), []);
 
@@ -76,7 +99,11 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
     try {
       if (isInitial) setLoading(true);
 
-      // 1. Load driver record
+      // 1. Fetch fleet vehicles for driver drawer
+      const fleet = await getFleetData(supabase);
+      setVehicles(fleet.vehicles);
+
+      // 2. Load driver record
       const { data: dData } = await supabase
         .from('drivers')
         .select('*')
@@ -85,7 +112,7 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
 
       if (dData) setDriver(dData);
 
-      // 2. Load assigned device
+      // 3. Load assigned device
       const { data: devData } = await supabase
         .from('devices')
         .select('*')
@@ -97,7 +124,7 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
         setDevice(devData);
         assignedDeviceId = devData.device_id;
 
-        // 3. Load associated vehicle
+        // 4. Load associated vehicle
         if (devData.vehicle_id) {
           const { data: vData } = await supabase
             .from('vehicles')
@@ -107,75 +134,69 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
 
           if (vData) setVehicle(vData);
         }
+      } else {
+        setDevice(null);
+        setVehicle(null);
       }
 
-      // 4. Load active trip if any for this driver or their assigned device
-      const { data: tripsData } = await supabase
+      // 5. Load all trips for this driver / assigned device
+      let tripsQuery = supabase
         .from('trips')
         .select('*')
-        .order('started_at', { ascending: false })
-        .limit(20);
+        .order('started_at', { ascending: false });
 
-      if (tripsData) {
-        const foundActive = tripsData.find((t: any) => {
-          const matchDriver = t.driver_id === driverId || (assignedDeviceId && t.device_id === assignedDeviceId);
-          const st = String(t.status || '').toLowerCase();
-          const isOpen = (st === 'open' || !t.ended_at) && st !== 'closed' && st !== 'abandoned';
-          return matchDriver && isOpen;
-        });
-
-        if (foundActive) {
-          setActiveTrip({
-            id: String(foundActive.id || foundActive.trip_id || ''),
-            started_at: String(foundActive.started_at || ''),
-            distance_m: Number(foundActive.distance_m || 0),
-            duration_s: Number(foundActive.duration_s || 0),
-            avg_speed_kmh: Number(foundActive.avg_speed_kmh || ((foundActive.avg_speed_mps || 0) * 3.6)),
-            max_speed_kmh: Number(foundActive.max_speed_kmh || ((foundActive.max_speed_mps || 0) * 3.6)),
-            status: String(foundActive.status || 'open'),
-            device_id: String(foundActive.device_id || ''),
-          });
-        } else {
-          setActiveTrip(null);
-        }
-      }
-
-      // 5. Load driving events for this driver (matching assigned device_id or driver's trip_ids)
-      let eData: any[] = [];
       if (assignedDeviceId) {
-        const { data, error: eErr } = await supabase
-          .from('driving_events')
-          .select('*')
-          .eq('device_id', assignedDeviceId)
-          .order('occurred_at', { ascending: false })
-          .limit(200);
-
-        if (eErr) {
-          console.error('Error querying driving_events for device:', eErr);
-        } else if (data) {
-          eData = data;
-        }
-      } else if (tripsData && tripsData.length > 0) {
-        const driverTripIds = tripsData
-          .filter((t: any) => t.driver_id === driverId)
-          .map((t: any) => t.id || t.trip_id)
-          .filter(Boolean);
-
-        if (driverTripIds.length > 0) {
-          const { data, error: eErr } = await supabase
-            .from('driving_events')
-            .select('*')
-            .in('trip_id', driverTripIds)
-            .order('occurred_at', { ascending: false })
-            .limit(200);
-
-          if (!eErr && data) {
-            eData = data;
-          }
-        }
+        tripsQuery = tripsQuery.or(`driver_id.eq.${driverId},device_id.eq.${assignedDeviceId}`);
+      } else {
+        tripsQuery = tripsQuery.eq('driver_id', driverId);
       }
 
-      const mappedEvents: TelematicsEvent[] = eData.map((e: any) => ({
+      const { data: tripsData } = await tripsQuery;
+      const allDriverTrips = tripsData || [];
+
+      // Calculate lifetime / rolling exposure metrics
+      const distKm = allDriverTrips.reduce((acc: number, t: any) => acc + (Number(t.distance_m) || 0) / 1000, 0);
+      const movingHrs = allDriverTrips.reduce((acc: number, t: any) => acc + (Number(t.moving_s || t.duration_s) || 0) / 3600, 0);
+      setTotalDistanceKm(Number(distKm.toFixed(1)));
+      setTotalTripsCount(allDriverTrips.length);
+      setTotalMovingHours(Number(movingHrs.toFixed(1)));
+
+      // Find current open active trip
+      const foundActive = allDriverTrips.find((t: any) => {
+        const st = String(t.status || '').toLowerCase();
+        return (st === 'open' || !t.ended_at) && st !== 'closed' && st !== 'abandoned';
+      });
+
+      if (foundActive) {
+        setActiveTrip({
+          id: String(foundActive.id || foundActive.trip_id || ''),
+          started_at: String(foundActive.started_at || ''),
+          distance_m: Number(foundActive.distance_m || 0),
+          duration_s: Number(foundActive.duration_s || 0),
+          avg_speed_kmh: Number(foundActive.avg_speed_kmh || ((foundActive.avg_speed_mps || 0) * 3.6)),
+          max_speed_kmh: Number(foundActive.max_speed_kmh || ((foundActive.max_speed_mps || 0) * 3.6)),
+          status: String(foundActive.status || 'open'),
+          device_id: String(foundActive.device_id || ''),
+        });
+      } else {
+        setActiveTrip(null);
+      }
+
+      // 6. Load driving events (matching driver_id or assigned device_id)
+      let eventsQuery = supabase
+        .from('driving_events')
+        .select('*')
+        .order('occurred_at', { ascending: false });
+
+      const filterClauses = [`driver_id.eq.${driverId}`];
+      if (assignedDeviceId) {
+        filterClauses.push(`device_id.eq.${assignedDeviceId}`);
+      }
+      eventsQuery = eventsQuery.or(filterClauses.join(',')).limit(300);
+
+      const { data: eData } = await eventsQuery;
+
+      const mappedEvents: TelematicsEvent[] = (eData || []).map((e: any) => ({
         id: e.id,
         event_key: e.event_key,
         type: e.type,
@@ -188,7 +209,6 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
         device_id: e.device_id,
       }));
 
-      // Update state with events
       setEvents(mappedEvents);
 
       // Compute dynamic continuous score matching /drivers and /
@@ -199,9 +219,29 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
       const itemizedDeductions = calculateDriverDeductions(mappedEvents);
       setDeductions(itemizedDeductions);
 
-      // Compute score fluctuations timeline
+      // Compute §8 fairness excluded events
+      const excluded = getExcludedEvents(mappedEvents);
+      setExcludedEvents(excluded);
+
+      // Compute score timeline
       const timeline = generateScoreTimeline(mappedEvents);
       setTimelineData(timeline);
+
+      // Average road roughness from device telemetry
+      if (assignedDeviceId) {
+        const { data: telData } = await supabase
+          .from('telemetry')
+          .select('accel_cal')
+          .eq('device_id', assignedDeviceId)
+          .order('server_received_at', { ascending: false })
+          .limit(100);
+
+        if (telData && telData.length > 0) {
+          const sumRms = telData.reduce((acc: number, row: any) => acc + (Number(row.accel_cal?.vertical_rms) || 0), 0);
+          setRoadRoughness(Number((sumRms / telData.length).toFixed(2)));
+        }
+      }
+
       setLastUpdated(new Date());
     } catch (err) {
       console.error('Error loading driver profile:', err);
@@ -214,30 +254,14 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
     setIsMounted(true);
     loadDriverData(true);
 
-    // Supabase Realtime Channel for instant push updates
     const channel = supabase
       .channel(`realtime_driver_${driverId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'driving_events' },
-        () => {
-          loadDriverData(false);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'trips' },
-        () => {
-          loadDriverData(false);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'telemetry' },
-        () => {
-          loadDriverData(false);
-        }
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' }, () => loadDriverData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => loadDriverData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => loadDriverData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'driving_events' }, () => loadDriverData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => loadDriverData(false))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'telemetry' }, () => loadDriverData(false))
       .subscribe();
 
     const interval = setInterval(() => {
@@ -249,6 +273,20 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
       clearInterval(interval);
     };
   }, [driverId, loadDriverData, supabase]);
+
+  const handleSaveDriver = async (formData: {
+    name: string;
+    licence_ref: string;
+    assign_vehicle_id: string;
+  }) => {
+    await updateDriver(supabase, driverId, formData);
+    await loadDriverData(false);
+  };
+
+  const handleDeleteDriver = async (id: string) => {
+    await deleteDriver(supabase, id);
+    router.push('/drivers');
+  };
 
   const radarScores = useMemo(() => calculateFactorRadarScores(events), [events]);
 
@@ -271,6 +309,10 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
     currentScore >= 90 ? 'border-emerald-800/60' : currentScore >= 75 ? 'border-amber-800/60' : 'border-rose-800/60';
   const scoreBgColor =
     currentScore >= 90 ? 'bg-emerald-950/20' : currentScore >= 75 ? 'bg-amber-950/20' : 'bg-rose-950/20';
+
+  const eventsPer100km = totalDistanceKm > 0
+    ? Number((deductions.length / (totalDistanceKm / 100)).toFixed(1))
+    : 0;
 
   return (
     <div className="flex flex-col min-h-screen bg-black text-white font-sans text-xs">
@@ -298,6 +340,22 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
                 <span className="text-emerald-400/80">({(activeTrip.distance_m / 1000).toFixed(1)} km)</span>
               </Link>
             )}
+
+            <button
+              onClick={() => setScoreAuditOpen(true)}
+              className="inline-flex items-center gap-1.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 px-2.5 py-1 rounded-md text-[11px] font-mono text-zinc-300 hover:text-white transition-colors cursor-pointer"
+            >
+              <FileText size={12} className="text-emerald-400" />
+              <span>Audit Breakdown</span>
+            </button>
+
+            <button
+              onClick={() => setDriverDrawerOpen(true)}
+              className="inline-flex items-center gap-1.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 px-2.5 py-1 rounded-md text-[11px] font-mono text-zinc-300 hover:text-white transition-colors cursor-pointer"
+            >
+              <Edit2 size={12} className="text-sky-400" />
+              <span>Edit Driver</span>
+            </button>
 
             <div className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 px-2.5 py-1 rounded-md text-[11px] font-mono text-zinc-400">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -365,7 +423,11 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
             </div>
 
             {/* Real-time Safety Score Summary */}
-            <div className={`flex items-center gap-4 px-4 py-3 rounded-md border ${scoreBorderColor} ${scoreBgColor} font-mono self-start md:self-auto`}>
+            <div
+              onClick={() => setScoreAuditOpen(true)}
+              title="Click to inspect itemized continuous scoring audit"
+              className={`flex items-center gap-4 px-4 py-3 rounded-md border ${scoreBorderColor} ${scoreBgColor} font-mono self-start md:self-auto cursor-pointer hover:border-zinc-700 transition-colors`}
+            >
               <div>
                 <div className="text-[10px] uppercase font-semibold text-zinc-400 tracking-wider">
                   24h Safety Score
@@ -388,7 +450,31 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
             </div>
           </div>
 
-          {/* Active Trip Telematics Bar (Only rendered when driver is in an active trip) */}
+          {/* Exposure & Lifetime Stats Ribbon */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 border-t border-zinc-800/80 pt-3">
+            <div className="bg-zinc-900/40 p-2.5 rounded-md border border-zinc-800/60">
+              <span className="text-[10px] text-zinc-500 uppercase font-mono block">Total Distance</span>
+              <span className="text-sm font-bold font-mono text-white">{totalDistanceKm} km</span>
+            </div>
+            <div className="bg-zinc-900/40 p-2.5 rounded-md border border-zinc-800/60">
+              <span className="text-[10px] text-zinc-500 uppercase font-mono block">Trips Logged</span>
+              <span className="text-sm font-bold font-mono text-white">{totalTripsCount}</span>
+            </div>
+            <div className="bg-zinc-900/40 p-2.5 rounded-md border border-zinc-800/60">
+              <span className="text-[10px] text-zinc-500 uppercase font-mono block">Driving Hours</span>
+              <span className="text-sm font-bold font-mono text-white">{totalMovingHours} hrs</span>
+            </div>
+            <div className="bg-zinc-900/40 p-2.5 rounded-md border border-zinc-800/60">
+              <span className="text-[10px] text-zinc-500 uppercase font-mono block">Infractions / 100km</span>
+              <span className="text-sm font-bold font-mono text-white">{eventsPer100km}</span>
+            </div>
+            <div className="bg-zinc-900/40 p-2.5 rounded-md border border-zinc-800/60 col-span-2 sm:col-span-1">
+              <span className="text-[10px] text-zinc-500 uppercase font-mono block">Road Roughness</span>
+              <span className="text-sm font-bold font-mono text-sky-400">{roadRoughness} m/s²</span>
+            </div>
+          </div>
+
+          {/* Active Trip Telematics Bar */}
           {activeTrip && (
             <div className="bg-emerald-950/30 border border-emerald-800/50 rounded-md p-3 flex flex-wrap items-center justify-between gap-3 font-mono text-xs">
               <div className="flex items-center gap-3">
@@ -513,90 +599,170 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
             </div>
           </div>
 
-          {/* Right Column (7 Cols): Itemized Incident Deductions & Penalties */}
-          <div className="lg:col-span-7 bg-zinc-950 border border-zinc-800 rounded-md p-4 flex flex-col">
-            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2.5 mb-3">
-              <div className="flex items-center gap-2">
-                <AlertTriangle size={14} className={deductions.length > 0 ? 'text-amber-400' : 'text-zinc-400'} />
-                <h2 className="text-xs font-semibold text-white uppercase tracking-wider">
-                  Attributed Penalty Deductions
-                </h2>
-              </div>
-              <span className="text-[10px] text-zinc-400 font-mono">
-                {deductions.length} {deductions.length === 1 ? 'event' : 'events'} in 24h
-              </span>
-            </div>
-
-            <div className="flex-1 overflow-y-auto min-h-[300px]">
-              {deductions.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-2">
-                  <div className="p-3 rounded-full bg-emerald-950/40 border border-emerald-800/40 text-emerald-400">
-                    <CheckCircle2 size={24} />
-                  </div>
-                  <p className="text-white font-medium text-xs">Pristine 24-Hour Driving Record</p>
-                  <p className="text-zinc-500 text-[11px] max-w-sm">
-                    No safety infractions, harsh events, or preventable impacts attributed to this driver. Score is operating at 100.0 baseline.
-                  </p>
+          {/* Right Column (7 Cols): Deductions & Fairly Excluded Events */}
+          <div className="lg:col-span-7 space-y-4">
+            {/* Attributed Penalty Deductions */}
+            <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 flex flex-col">
+              <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2.5 mb-3">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle size={14} className={deductions.length > 0 ? 'text-amber-400' : 'text-zinc-400'} />
+                  <h2 className="text-xs font-semibold text-white uppercase tracking-wider">
+                    Attributed Penalty Deductions
+                  </h2>
                 </div>
-              ) : (
-                <div className="space-y-2">
-                  {deductions.map((d, idx) => {
-                    const meta = formatEventType(d.type);
-                    const rowKey = d.id ? `deduct-${d.id}-${idx}` : `deduct-${idx}`;
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  {deductions.length} {deductions.length === 1 ? 'event' : 'events'} in 24h
+                </span>
+              </div>
 
-                    return (
-                      <div
-                        key={rowKey}
-                        className="bg-zinc-900/50 border border-zinc-800/80 rounded-md p-3 flex items-center justify-between gap-3 hover:bg-zinc-900 transition-colors"
-                      >
-                        <div className="flex items-start gap-2.5">
-                          <span
-                            className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                            style={{ backgroundColor: meta.dotColor }}
-                          />
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-white text-xs">{meta.label}</span>
-                              <span
-                                className={`px-1.5 py-0.2 rounded-xs text-[9px] font-mono font-bold uppercase ${
-                                  d.severity === 'critical'
-                                    ? 'bg-rose-950 text-rose-400 border border-rose-800/60'
-                                    : d.severity === 'high'
-                                    ? 'bg-amber-950 text-amber-400 border border-amber-800/60'
-                                    : 'bg-zinc-800 text-zinc-300'
-                                }`}
-                              >
-                                {d.severity}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2.5 text-[10px] text-zinc-500 font-mono mt-0.5">
-                              <span suppressHydrationWarning className="flex items-center gap-1">
-                                <Clock size={10} className="text-zinc-600" />
-                                {isMounted && d.occurredAt
-                                  ? new Date(d.occurredAt).toLocaleTimeString()
-                                  : (d.occurredAt ? String(d.occurredAt).slice(11, 19) : '—')}
-                              </span>
-                              <span>•</span>
-                              <span>State: {d.opState}</span>
-                              <span>•</span>
-                              <span>Decay: {d.decayFactor}x</span>
+              <div className="flex-1 overflow-y-auto max-h-[320px]">
+                {deductions.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-2">
+                    <div className="p-3 rounded-full bg-emerald-950/40 border border-emerald-800/40 text-emerald-400">
+                      <CheckCircle2 size={24} />
+                    </div>
+                    <p className="text-white font-medium text-xs">Pristine 24-Hour Driving Record</p>
+                    <p className="text-zinc-500 text-[11px] max-w-sm">
+                      No safety infractions, harsh events, or preventable impacts attributed to this driver. Score is operating at 100.0 baseline.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {deductions.map((d, idx) => {
+                      const meta = formatEventType(d.type);
+                      const rowKey = d.id ? `deduct-${d.id}-${idx}` : `deduct-${idx}`;
+
+                      return (
+                        <div
+                          key={rowKey}
+                          className="bg-zinc-900/50 border border-zinc-800/80 rounded-md p-3 flex items-center justify-between gap-3 hover:bg-zinc-900 transition-colors"
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <span
+                              className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                              style={{ backgroundColor: meta.dotColor }}
+                            />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-white text-xs">{meta.label}</span>
+                                <span
+                                  className={`px-1.5 py-0.2 rounded-xs text-[9px] font-mono font-bold uppercase ${
+                                    d.severity === 'critical'
+                                      ? 'bg-rose-950 text-rose-400 border border-rose-800/60'
+                                      : d.severity === 'high'
+                                      ? 'bg-amber-950 text-amber-400 border border-amber-800/60'
+                                      : 'bg-zinc-800 text-zinc-300'
+                                  }`}
+                                >
+                                  {d.severity}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2.5 text-[10px] text-zinc-500 font-mono mt-0.5">
+                                <span suppressHydrationWarning className="flex items-center gap-1">
+                                  <Clock size={10} className="text-zinc-600" />
+                                  {isMounted && d.occurredAt
+                                    ? new Date(d.occurredAt).toLocaleTimeString()
+                                    : (d.occurredAt ? String(d.occurredAt).slice(11, 19) : '—')}
+                                </span>
+                                <span>•</span>
+                                <span>State: {d.opState}</span>
+                                <span>•</span>
+                                <span>Decay: {d.decayFactor}x</span>
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <div className="text-right font-mono shrink-0">
-                          <span className="text-rose-400 font-bold text-xs">-{d.netPenalty.toFixed(1)}</span>
-                          <span className="text-zinc-600 text-[10px] block">pts penalty</span>
+                          <div className="text-right font-mono shrink-0">
+                            <span className="text-rose-400 font-bold text-xs">-{d.netPenalty.toFixed(1)}</span>
+                            <span className="text-zinc-600 text-[10px] block">pts penalty</span>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* §8 Fairly Excluded Events (Road Defect & Sensor Protections) */}
+            <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 flex flex-col">
+              <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2.5 mb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={14} className="text-sky-400" />
+                  <h2 className="text-xs font-semibold text-white uppercase tracking-wider">
+                    Arbitrated & Excluded Events (§8 Fairness Filter)
+                  </h2>
                 </div>
-              )}
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  {excludedEvents.length} protected
+                </span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto max-h-[220px]">
+                {excludedEvents.length === 0 ? (
+                  <div className="p-4 text-center text-zinc-500 font-mono text-[11px]">
+                    No external road anomalies or sensor artifacts required arbitration in this window.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {excludedEvents.map((ex, idx) => {
+                      const meta = formatEventType(ex.type);
+                      const exKey = ex.id ? `ex-${ex.id}-${idx}` : `ex-${idx}`;
+
+                      return (
+                        <div
+                          key={exKey}
+                          className="bg-zinc-900/30 border border-zinc-800/60 rounded-md p-2.5 flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="flex items-start gap-2">
+                            <span
+                              className="w-2 h-2 rounded-full mt-1 shrink-0"
+                              style={{ backgroundColor: meta.dotColor }}
+                            />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-zinc-200">{meta.label}</span>
+                                <span className="text-[9px] px-1 py-0.2 rounded-xs bg-sky-950 text-sky-400 border border-sky-800/60 font-mono font-bold">
+                                  0.0 PTS PENALTY
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-zinc-500 mt-0.5">{ex.reason}</p>
+                            </div>
+                          </div>
+
+                          <span suppressHydrationWarning className="text-[10px] font-mono text-zinc-600 shrink-0">
+                            {isMounted && ex.occurredAt ? new Date(ex.occurredAt).toLocaleTimeString() : '—'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Driver Registration & Edit Drawer */}
+      <DriverDrawer
+        isOpen={driverDrawerOpen}
+        onClose={() => setDriverDrawerOpen(false)}
+        driver={driver}
+        vehicles={vehicles}
+        onSave={handleSaveDriver}
+        onDelete={handleDeleteDriver}
+      />
+
+      {/* Score Audit Slide-over Drawer */}
+      <ScoreAuditDrawer
+        isOpen={scoreAuditOpen}
+        onClose={() => setScoreAuditOpen(false)}
+        driverName={driver?.name || 'Driver'}
+        vehiclePlate={vehicle?.plate || 'No Vehicle'}
+        currentScore={currentScore}
+        events={events}
+      />
     </div>
   );
 }

@@ -18,7 +18,7 @@ import { createDb, closeDb, ADVISORY_LOCKS } from '../src/db/client.js';
 import type { Db } from '../src/db/client.js';
 import { THRESHOLDS, RULE_VERSION } from '../src/config/thresholds.js';
 import { rollupDaily, groupForRollup, type TripScoreInput } from '../src/score/rollup.js';
-import type { ScorableEvent } from '../src/score/penalties.js';
+import { cellToLatLng } from 'h3-js';
 import type { Trip } from '../src/types.js';
 
 interface MaintenanceArgs {
@@ -92,6 +92,8 @@ async function reArbitrateDefects(db: Db): Promise<number> {
     {
       h3_12: string;
       heading_sector: number;
+      centroid_lat: number | null;
+      centroid_lon: number | null;
       pass_count: number;
       device_count: number;
       spike_count: number;
@@ -99,7 +101,7 @@ async function reArbitrateDefects(db: Db): Promise<number> {
       defect_confidence: number;
     }[]
   >`
-    select h3_12, heading_sector, pass_count, device_count, spike_count, roughness_index, defect_confidence
+    select h3_12, heading_sector, centroid_lat, centroid_lon, pass_count, device_count, spike_count, roughness_index, defect_confidence
     from road_cells
     where device_count >= 3
   `;
@@ -108,16 +110,31 @@ async function reArbitrateDefects(db: Db): Promise<number> {
   for (const c of defects) {
     const spikeRate = c.pass_count > 0 ? c.spike_count / c.pass_count : 0;
     if (spikeRate >= THRESHOLDS.arbitration.roadSpikeRate) {
+      let lat = c.centroid_lat;
+      let lon = c.centroid_lon;
+      if (lat === null || lon === null) {
+        try {
+          const coords = cellToLatLng(c.h3_12);
+          lat = coords[0];
+          lon = coords[1];
+        } catch {
+          lat = null;
+          lon = null;
+        }
+      }
+
       await db`
         insert into road_defects (
-          h3_12, heading_sector, confidence, severity, distinct_devices, spike_rate, first_seen, last_seen, status
+          h3_12, heading_sector, lat, lon, confidence, severity, distinct_devices, spike_rate, first_seen, last_seen, status
         )
         values (
-          ${c.h3_12}, ${c.heading_sector}, ${c.defect_confidence},
+          ${c.h3_12}, ${c.heading_sector}, ${lat}, ${lon}, ${c.defect_confidence},
           ${spikeRate > 0.8 ? 'high' : 'medium'},
           ${c.device_count}, ${spikeRate}, now(), now(), 'active'
         )
         on conflict (h3_12, heading_sector) do update set
+          lat = coalesce(excluded.lat, road_defects.lat),
+          lon = coalesce(excluded.lon, road_defects.lon),
           confidence = excluded.confidence,
           distinct_devices = excluded.distinct_devices,
           spike_rate = excluded.spike_rate,

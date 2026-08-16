@@ -364,25 +364,35 @@ export function RawTelemetryTable({
 
                     {/* PEAK / RMS */}
                     <td className="p-2.5 border-r border-zinc-900/80 text-right tabular-nums whitespace-nowrap text-zinc-400">
-                      <span className="text-amber-300 font-semibold">{row.calibrated_accel.peak_g}</span>
+                      <span className="text-amber-300 font-semibold">
+                        {typeof row.calibrated_accel.peak_g === 'number' && !isNaN(row.calibrated_accel.peak_g)
+                          ? row.calibrated_accel.peak_g.toFixed(2)
+                          : '--'}
+                      </span>
                       <span className="text-zinc-600 mx-1">/</span>
-                      <span className="text-zinc-400">{row.calibrated_accel.rms_g}</span>
+                      <span className="text-zinc-400">
+                        {typeof row.calibrated_accel.rms_g === 'number' && !isNaN(row.calibrated_accel.rms_g)
+                          ? row.calibrated_accel.rms_g.toFixed(2)
+                          : '--'}
+                      </span>
                     </td>
 
                     {/* YAW RATE */}
                     <td className="p-2.5 border-r border-zinc-900/80 text-right tabular-nums font-medium text-zinc-200 whitespace-nowrap">
-                      {row.yaw_rate > 0 ? `+${row.yaw_rate.toFixed(1)}` : row.yaw_rate.toFixed(1)}°/s
+                      {typeof row.yaw_rate === 'number' && !isNaN(row.yaw_rate)
+                        ? (row.yaw_rate > 0 ? `+${row.yaw_rate.toFixed(1)}` : row.yaw_rate.toFixed(1))
+                        : '0.0'}°/s
                     </td>
 
                     {/* MIC RMS */}
                     <td className="p-2.5 border-r border-zinc-900/80 text-right tabular-nums text-zinc-300">
-                      {row.mic_rms}
+                      {row.mic_rms ?? 0}
                     </td>
 
                     {/* SPEED */}
                     <td className="p-2.5 border-r border-zinc-900/80 text-right tabular-nums font-bold whitespace-nowrap">
                       {row.flags.gps_fix ? (
-                        <span className="text-white">{row.gps.speed_kmh.toFixed(1)} <span className="text-[9px] text-zinc-500 font-normal">km/h</span></span>
+                        <span className="text-white">{(row.gps.speed_kmh ?? 0).toFixed(1)} <span className="text-[9px] text-zinc-500 font-normal">km/h</span></span>
                       ) : (
                         <span className="text-zinc-600">0.0</span>
                       )}
@@ -393,7 +403,7 @@ export function RawTelemetryTable({
                       {row.flags.gps_fix ? (
                         <span className="inline-flex items-center gap-0.5">
                           <Compass size={10} className="text-zinc-500" />
-                          <span>{row.gps.heading_deg}°</span>
+                          <span>{(row.gps.heading_deg ?? 0).toFixed(0)}°</span>
                         </span>
                       ) : (
                         <span className="text-zinc-600">--</span>
@@ -403,7 +413,7 @@ export function RawTelemetryTable({
                     {/* LAT / LON */}
                     <td className="p-2.5 border-r border-zinc-900/80 text-zinc-400 tabular-nums whitespace-nowrap text-[10px]">
                       {row.flags.gps_fix ? (
-                        <span>{row.gps.lat.toFixed(5)}, {row.gps.lon.toFixed(5)}</span>
+                        <span>{(row.gps.lat ?? 0).toFixed(5)}, {(row.gps.lon ?? 0).toFixed(5)}</span>
                       ) : (
                         <span className="text-zinc-600">NO FIX (0, 0)</span>
                       )}
@@ -414,9 +424,9 @@ export function RawTelemetryTable({
                       {row.flags.gps_fix ? (
                         <span className="inline-flex items-center gap-1 text-[10px]">
                           <span className="px-1 py-0.2 rounded bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/40">
-                            {row.gps.sats}s
+                            {row.gps.sats ?? 0}s
                           </span>
-                          <span className="text-zinc-500">h:{row.gps.hdop}</span>
+                          <span className="text-zinc-500">h:{row.gps.hdop ?? 0}</span>
                         </span>
                       ) : (
                         <span className="px-1 py-0.2 rounded bg-rose-950/80 text-rose-400 text-[10px] border border-rose-900/50">
@@ -447,6 +457,16 @@ export function RawTelemetryTable({
                         ) : (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950/80 text-amber-400 border border-amber-900/50">
                             <span>UNCALIB</span>
+                          </span>
+                        )}
+
+                        {row.flags.storage_ok !== false ? (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-zinc-900 text-emerald-400 border border-zinc-800">
+                            <span>STORAGE_OK</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950/80 text-amber-400 border border-amber-900/50">
+                            <span>SPOOL/DROP</span>
                           </span>
                         )}
                       </div>

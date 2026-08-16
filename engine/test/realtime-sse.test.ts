@@ -205,4 +205,62 @@ describe('Realtime Broadcast & SSE', () => {
 
     await sink.close();
   });
+
+  it('PgSink includes driver_id in mapped driving_events rows', async () => {
+    let capturedRows: any[] = [];
+    const txMock: any = (arg: any, ..._rest: any[]) => {
+      if (Array.isArray(arg) && arg.length > 0 && typeof arg[0] === 'object' && 'event_key' in arg[0]) {
+        capturedRows = arg;
+      }
+      return Promise.resolve([]);
+    };
+    const fakeDb: any = {
+      begin: async (callback: any) => {
+        await callback(txMock);
+      },
+    };
+
+    const sink = new PgSink(fakeDb, createSilentLogger(), {
+      flushMs: 50,
+      maxRows: 10,
+    });
+
+    const testEvent: PersistableEvent = {
+      type: 'driver.harsh_brake',
+      category: 'driver',
+      severity: 'medium',
+      confidence: 0.9,
+      deviceId: 'dev-1',
+      driverId: '00000000-0000-0000-0000-000000000001',
+      bootId: 'b1',
+      anchorSeq: 1,
+      occurredAt: 1700000000,
+      timeQuality: 'gps',
+      lat: 6.9,
+      lon: 79.8,
+      h3_12: '8c608e90a5a41ff',
+      headingSector: 0,
+      speedKmh: 40,
+      magnitude: 4.2,
+      magnitudeUnit: 'm/s2',
+      severityCensored: false,
+      attributedToDriver: true,
+      roadDefectId: null,
+      evidence: {},
+      telemetryIds: [1],
+      eventKey: 'k-driver-1',
+      tripId: 't1',
+      ruleVersion: RULE_VERSION,
+      engineVersion: '0.1.0',
+    };
+
+    sink.enqueueEvent(testEvent);
+    await sink.flush();
+
+    expect(capturedRows.length).toBe(1);
+    expect(capturedRows[0].driver_id).toBe('00000000-0000-0000-0000-000000000001');
+    expect(capturedRows[0].event_key).toBe('k-driver-1');
+
+    await sink.close();
+  });
 });

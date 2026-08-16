@@ -63,6 +63,7 @@ export interface OSMMapProps {
   hexagons?: MapHexagon[];
   eventPulses?: EventPulse[];
   onMarkerClick?: (marker: MapMarker) => void;
+  onHexagonClick?: (hexagon: MapHexagon) => void;
   onMapClick?: (coords: [number, number]) => void;
   className?: string;
 }

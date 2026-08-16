@@ -357,6 +357,7 @@ export default function LeafletMapClient({
   hexagons = [],
   eventPulses = [],
   onMarkerClick,
+  onHexagonClick,
   onMapClick,
   className = '',
 }: OSMMapProps) {
@@ -404,6 +405,9 @@ export default function LeafletMapClient({
               fillColor: hex.color,
               fillOpacity: hex.fillOpacity ?? 0.35,
               weight: 1,
+            }}
+            eventHandlers={{
+              click: () => onHexagonClick?.(hex),
             }}
           >
             <Popup>

@@ -1,6 +1,10 @@
 #pragma once
 #include "globals.h"
 
+#include "gps.h"
+
+inline void triggerInstantSpikePush();
+
 inline void recoverI2CBus(int sdaPin, int sclPin) {
   pinMode(sdaPin, INPUT_PULLUP);
   pinMode(sclPin, INPUT_PULLUP);
@@ -107,9 +111,12 @@ inline void sampleSensors() {
   float vertical   = along - gLen;
   float horizontal = sqrtf(max(accMag * accMag - along * along, 0.0f));
 
-  win.vertPeak     = max(win.vertPeak, fabsf(vertical));
+  float instVert   = fabsf(vertical);
+  float instMag    = fabsf(accMag - gLen);
+
+  win.vertPeak     = max(win.vertPeak, instVert);
   win.horizPeak    = max(win.horizPeak, horizontal);
-  win.accelMagPeak = max(win.accelMagPeak, fabsf(accMag - gLen));
+  win.accelMagPeak = max(win.accelMagPeak, instMag);
   win.vertSumSq   += double(vertical) * vertical;
 
   float gyr[3]      = {float(gx), float(gy), float(gz)};
@@ -130,14 +137,11 @@ inline void sampleSensors() {
   // and at least 500ms has elapsed since the last instant push.
   constexpr float SPIKE_THRESHOLD = 2.5f * cfg::GRAVITY_COUNTS;
   uint32_t now = millis();
-  if ((win.vertPeak > SPIKE_THRESHOLD || win.accelMagPeak > SPIKE_THRESHOLD) &&
+  if ((instVert > SPIKE_THRESHOLD || instMag > SPIKE_THRESHOLD) &&
       (now - lastInstantSpikeMs >= 500)) {
     lastInstantSpikeMs = now;
     triggerInstantSpikePush();
   }
 }
 
-inline void serviceGPS() {
-  while (GPSSerial.available()) gps.encode(GPSSerial.read());
-}
 

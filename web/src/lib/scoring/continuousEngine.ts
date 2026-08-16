@@ -44,6 +44,15 @@ export interface DeductionItem {
   opState: OperationalState;
 }
 
+export interface ExcludedEventItem {
+  id?: string;
+  type: string;
+  severity: string;
+  occurredAt?: string;
+  reason: string;
+  event: TelematicsEvent;
+}
+
 export interface DriverAggregates {
   score24h: number;
   totalDistanceKm: number;
@@ -63,7 +72,7 @@ export const STATE_WEIGHTS: Record<OperationalState, number> = {
 
 // Base Penalty Deductions per Event Type
 export const EVENT_BASE_PENALTIES: Record<string, number> = {
-  'road.pothole_impact': 12.0,
+  'driver.collision_suspected': 25.0,
   'driver.harsh_brake': 8.0,
   'driver.harsh_accel': 5.0,
   'driver.sharp_corner': 3.0,
@@ -72,12 +81,19 @@ export const EVENT_BASE_PENALTIES: Record<string, number> = {
   'driver.avoidable_impact': 9.0,
   'driver.speeding_relative': 6.0,
   'driver.speeding_for_conditions': 7.0,
+  'driver.speeding': 6.0,
+  'driver.harsh_turn': 4.0,
+  'driver.aggressive_lane_change': 7.0,
   'driver.excessive_idling': 4.0,
   'driver.continuous_driving': 8.0,
   'engine.excessive_idle': 4.0,
   'depot.yard_shunt_impact': 10.0,
   'security.unauthorized_movement': 15.0,
   'engine.pto_overrev': 6.0,
+  'road.pothole_impact': 12.0,
+  'road.rough_segment': 4.0,
+  'road.defect_observation': 0.0,
+  'road.impact_candidate': 0.0,
 };
 
 // Severity Multipliers
@@ -187,8 +203,8 @@ export function generateScoreTimeline(events: TelematicsEvent[], nowTs: number =
 /**
  * Returns list of events excluded from driver scoring (§8 fairness audit)
  */
-export function getExcludedEvents(events: TelematicsEvent[]): { event: TelematicsEvent; reason: string }[] {
-  const excluded: { event: TelematicsEvent; reason: string }[] = [];
+export function getExcludedEvents(events: TelematicsEvent[]): ExcludedEventItem[] {
+  const excluded: ExcludedEventItem[] = [];
   for (const evt of events) {
     if (evt.attributed_to_driver === false) {
       const isIntegrity = evt.type.startsWith('integrity.') || evt.type.startsWith('sensor.');
@@ -198,7 +214,14 @@ export function getExcludedEvents(events: TelematicsEvent[]): { event: Telematic
         : isIntegrity
         ? 'Excluded: hardware sensor anomaly / integrity flag'
         : 'Excluded: not attributed to driver behavior';
-      excluded.push({ event: evt, reason });
+      excluded.push({
+        id: evt.id,
+        type: evt.type,
+        severity: evt.severity,
+        occurredAt: evt.occurred_at,
+        reason,
+        event: evt,
+      });
     }
   }
   return excluded;
@@ -274,7 +297,7 @@ export function calculateFactorRadarScores(events: TelematicsEvent[]): FactorRad
 
     const basePen = (EVENT_BASE_PENALTIES[evt.type] ?? 4.0) * (SEVERITY_MULTIPLIERS[evt.severity] ?? 1.0);
 
-    if (evt.type.includes('harsh_brake') || evt.type.includes('harsh_accel')) {
+    if (evt.type.includes('harsh_brake') || evt.type.includes('harsh_accel') || evt.type.includes('collision')) {
       longitudinalPen += basePen;
     } else if (evt.type.includes('corner') || evt.type.includes('swerving')) {
       corneringPen += basePen;

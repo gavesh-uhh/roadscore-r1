@@ -60,11 +60,29 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
   droppedPosts = device.dropped_posts ?? 0,
   firmwareVersion = device.firmware_version ?? '1.0.0-mcu',
   gravityVector = device.gravity_vector ?? { x: 0, y: 0, z: 16384 },
-  mountShiftAngleDeg = device.mount_shift_angle_deg ?? 0.4,
+  mountShiftAngleDeg,
   calibrationState = device.calibration_state ?? 'calibrated',
 }) => {
+  // Compute dynamic mount shift angle if not explicitly provided
+  const computedMountShift = React.useMemo(() => {
+    if (typeof mountShiftAngleDeg === 'number') return mountShiftAngleDeg;
+    if (device.mount_shift_angle_deg != null) return device.mount_shift_angle_deg;
+    if (gravityVector && (gravityVector.x !== 0 || gravityVector.y !== 0 || gravityVector.z !== 0)) {
+      const horiz = Math.hypot(gravityVector.x, gravityVector.y);
+      const vert = Math.abs(gravityVector.z) || 1;
+      const deg = Math.atan2(horiz, vert) * (180 / Math.PI);
+      return parseFloat(deg.toFixed(1));
+    }
+    return 0.0;
+  }, [mountShiftAngleDeg, device.mount_shift_angle_deg, gravityVector]);
+
+  // Dynamic counts per 1g reference based on full scale
+  const accelFsG = Number(device.accel_fs_g || 2);
+  const countsPer1G = Math.round(32768 / accelFsG);
+
   // WiFi signal indicator helper
   const getWifiSignalQuality = (rssi: number) => {
+    if (rssi <= -95 || rssi === -99) return { label: 'Offline / Weak', color: 'text-zinc-500', bg: 'bg-zinc-600' };
     if (rssi >= -55) return { label: 'Excellent', color: 'text-emerald-400', bg: 'bg-emerald-500' };
     if (rssi >= -68) return { label: 'Good', color: 'text-emerald-400', bg: 'bg-emerald-500' };
     if (rssi >= -78) return { label: 'Fair', color: 'text-amber-400', bg: 'bg-amber-500' };
@@ -325,7 +343,7 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
                   Gravity Reference Vector
                 </span>
                 <span className="text-[10px] text-zinc-500 font-mono">
-                  1g = 16,384 LSB (±2g)
+                  1g = {countsPer1G.toLocaleString()} LSB (±{accelFsG}g)
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
@@ -358,20 +376,20 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
               </div>
               <div className="text-right">
                 <p className="text-lg font-bold font-mono text-white">
-                  {mountShiftAngleDeg}°
+                  {computedMountShift}°
                 </p>
                 <span
                   className={`text-[10px] font-semibold ${
-                    mountShiftAngleDeg < 1.0
+                    computedMountShift < 1.0
                       ? 'text-emerald-400'
-                      : mountShiftAngleDeg < 3.0
+                      : computedMountShift < 3.0
                       ? 'text-amber-400'
                       : 'text-rose-400'
                   }`}
                 >
-                  {mountShiftAngleDeg < 1.0
+                  {computedMountShift < 1.0
                     ? 'Optimal Orientation'
-                    : mountShiftAngleDeg < 3.0
+                    : computedMountShift < 3.0
                     ? 'Minor Shift'
                     : 'Recalibration Needed'}
                 </span>

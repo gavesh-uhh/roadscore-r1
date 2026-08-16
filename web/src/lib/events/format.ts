@@ -131,6 +131,22 @@ export const EVENT_DEFINITIONS: Record<string, EventMetadata> = {
     badgeClass: 'bg-sky-950 text-sky-400 border border-sky-800/60',
     dotColor: '#38bdf8',
   },
+  'road.hazard_ahead': {
+    label: 'Hazard Ahead Warning',
+    category: 'road',
+    categoryLabel: 'Lookahead Prediction',
+    description: 'Predictive lookahead cone warning issued for an upcoming confirmed road defect.',
+    badgeClass: 'bg-amber-950 text-amber-400 border border-amber-800/60',
+    dotColor: '#f59e0b',
+  },
+  'road.rough_segment_ahead': {
+    label: 'Rough Segment Warning',
+    category: 'road',
+    categoryLabel: 'Lookahead Prediction',
+    description: 'Predictive lookahead cone warning issued for an upcoming severely rough road segment.',
+    badgeClass: 'bg-orange-950 text-orange-400 border border-orange-800/60',
+    dotColor: '#f97316',
+  },
 
   // Hardware & Integrity Events
   'integrity.data_gap': {

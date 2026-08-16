@@ -54,38 +54,54 @@ export default function LiveTelemetryOscilloscope() {
 
         if (data && isSubscribed) {
           const mapped = [...data].reverse().map((r: any) => {
-            const timeStr = r.ts ? new Date(r.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
+            const timeStr = r.ts
+              ? new Date(r.ts).toLocaleTimeString()
+              : (r.server_received_at ? new Date(r.server_received_at).toLocaleTimeString() : `#${r.seq ?? ''}`);
             
             const fsG = Number(r.accel_fs_g || 2);
             const countsPerG = 32768 / fsG;
             const fsDps = Number(r.gyro_fs_dps || 250);
             const countsPerDps = 32768 / fsDps;
 
-            // Accel Calibrated / Raw
-            const rawHoriz = r.accel_cal?.horizontal_peak != null 
-              ? Number(r.accel_cal.horizontal_peak) 
-              : (r.accel_raw?.x != null ? Number(r.accel_raw.x) : (r.accel_raw?.ax != null ? Number(r.accel_raw.ax) : 0.0));
-            const horiz = rawHoriz > 100 ? rawHoriz / countsPerG : rawHoriz;
+            // Accel Calibrated / Raw conversions
+            let vert = 0;
+            if (r.accel_cal?.vertical_rms != null) {
+              vert = Number(r.accel_cal.vertical_rms) / countsPerG;
+            } else if (r.calibrated_accel?.a_vert != null || r.calibrated_accel?.rms_g != null) {
+              vert = Number(r.calibrated_accel.a_vert ?? r.calibrated_accel.rms_g);
+            } else if (r.accel_raw?.z != null || r.accel_raw?.az != null) {
+              vert = Number(r.accel_raw.z ?? r.accel_raw.az) / countsPerG;
+            }
 
-            const rawMag = r.accel_cal?.magnitude_peak != null 
-              ? Number(r.accel_cal.magnitude_peak) 
-              : (r.accel_raw?.y != null ? Number(r.accel_raw.y) : (r.accel_raw?.ay != null ? Number(r.accel_raw.ay) : 0.0));
-            const mag = rawMag > 100 ? rawMag / countsPerG : rawMag;
+            let horiz = 0;
+            if (r.accel_cal?.horizontal_peak != null) {
+              horiz = Number(r.accel_cal.horizontal_peak) / countsPerG;
+            } else if (r.calibrated_accel?.a_long != null) {
+              horiz = Number(r.calibrated_accel.a_long);
+            } else if (r.accel_raw?.x != null || r.accel_raw?.ax != null) {
+              horiz = Number(r.accel_raw.x ?? r.accel_raw.ax) / countsPerG;
+            }
 
-            const rawVert = r.accel_cal?.vertical_rms != null 
-              ? Number(r.accel_cal.vertical_rms) 
-              : (r.accel_raw?.z != null ? Number(r.accel_raw.z) : (r.accel_raw?.az != null ? Number(r.accel_raw.az) : countsPerG));
-            const vert = rawVert > 100 ? rawVert / countsPerG : rawVert;
+            let mag = 0;
+            if (r.accel_cal?.magnitude_peak != null) {
+              mag = Number(r.accel_cal.magnitude_peak) / countsPerG;
+            } else if (r.calibrated_accel?.peak_g != null) {
+              mag = Number(r.calibrated_accel.peak_g);
+            } else {
+              mag = Math.hypot(horiz, vert);
+            }
             
-            // Gyro Calibrated / Raw
-            const rawYaw = r.gyro_cal?.yaw_rate_peak != null 
-              ? Number(r.gyro_cal.yaw_rate_peak) 
-              : (r.gyro_cal?.yaw_rate_deg_s != null 
-                  ? Number(r.gyro_cal.yaw_rate_deg_s) 
-                  : (r.gyro_raw?.z != null ? Number(r.gyro_raw.z) : (r.gyro_raw?.gz != null ? Number(r.gyro_raw.gz) : 0.0)));
-            const yaw = rawYaw > 10 ? rawYaw / countsPerDps : rawYaw;
+            // Gyro Calibrated / Raw conversions
+            let yaw = 0;
+            if (r.gyro_cal?.yaw_rate_peak != null) {
+              yaw = Number(r.gyro_cal.yaw_rate_peak) / countsPerDps;
+            } else if (r.gyro_cal?.yaw_rate_deg_s != null || r.yaw_rate != null) {
+              yaw = Number(r.gyro_cal?.yaw_rate_deg_s ?? r.yaw_rate);
+            } else if (r.gyro_raw?.z != null || r.gyro_raw?.gz != null) {
+              yaw = Number(r.gyro_raw.z ?? r.gyro_raw.gz) / countsPerDps;
+            }
 
-            const rssi = r.wifi_rssi != null ? Number(r.wifi_rssi) : -65;
+            const rssi = r.wifi_rssi != null ? Number(r.wifi_rssi) : -99;
 
             return {
               time: timeStr,
@@ -104,10 +120,24 @@ export default function LiveTelemetryOscilloscope() {
     }
 
     fetchLatest();
-    const interval = setInterval(fetchLatest, 1000);
+
+    // Supabase Realtime channel subscription for instant 50Hz/1Hz telemetry stream updates
+    const channel = supabase
+      .channel(`scope_telemetry_${deviceId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'telemetry', filter: `device_id=eq.${deviceId}` },
+        () => {
+          fetchLatest();
+        }
+      )
+      .subscribe();
+
+    const interval = setInterval(fetchLatest, 1500);
 
     return () => {
       isSubscribed = false;
+      supabase.removeChannel(channel);
       clearInterval(interval);
     };
   }, [deviceId, supabase]);
@@ -163,7 +193,7 @@ export default function LiveTelemetryOscilloscope() {
               Latest Vert RMS
             </span>
             <p className="text-lg font-bold text-sky-400">
-              {streamData.length > 0 ? streamData[streamData.length - 1].accelZ.toFixed(3) : '1.000'} g
+              {streamData.length > 0 ? `${streamData[streamData.length - 1].accelZ.toFixed(3)} g` : '--'}
             </p>
           </div>
 
@@ -173,7 +203,7 @@ export default function LiveTelemetryOscilloscope() {
               Latest Yaw Rate
             </span>
             <p className="text-lg font-bold text-amber-400">
-              {streamData.length > 0 ? streamData[streamData.length - 1].gyroYaw.toFixed(2) : '0.00'} °/s
+              {streamData.length > 0 ? `${streamData[streamData.length - 1].gyroYaw.toFixed(2)} °/s` : '--'}
             </p>
           </div>
 
@@ -183,7 +213,9 @@ export default function LiveTelemetryOscilloscope() {
               WiFi RSSI
             </span>
             <p className="text-lg font-bold text-emerald-400">
-              {streamData.length > 0 ? streamData[streamData.length - 1].wifiRssi : -65} dBm
+              {streamData.length > 0 && streamData[streamData.length - 1].wifiRssi !== -99
+                ? `${streamData[streamData.length - 1].wifiRssi} dBm`
+                : '--'}
             </p>
           </div>
         </div>
@@ -203,7 +235,7 @@ export default function LiveTelemetryOscilloscope() {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={streamData}>
                   <XAxis dataKey="time" stroke="#52525b" tick={{ fontSize: 9 }} />
-                  <YAxis stroke="#52525b" tick={{ fontSize: 9 }} domain={[-1.5, 2.5]} />
+                  <YAxis stroke="#52525b" tick={{ fontSize: 9 }} domain={['auto', 'auto']} />
                   <Tooltip contentStyle={{ backgroundColor: '#09090b', borderColor: '#27272a', fontSize: '10px' }} />
                   <Line type="monotone" dataKey="accelX" name="Horiz Peak" stroke="#a1a1aa" dot={false} isAnimationActive={false} strokeWidth={1.5} />
                   <Line type="monotone" dataKey="accelY" name="Mag Peak" stroke="#71717a" dot={false} isAnimationActive={false} strokeWidth={1.5} />
@@ -226,7 +258,7 @@ export default function LiveTelemetryOscilloscope() {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={streamData}>
                   <XAxis dataKey="time" stroke="#52525b" tick={{ fontSize: 9 }} />
-                  <YAxis yAxisId="left" stroke="#52525b" tick={{ fontSize: 9 }} domain={[-25, 25]} />
+                  <YAxis yAxisId="left" stroke="#52525b" tick={{ fontSize: 9 }} domain={['auto', 'auto']} />
                   <YAxis yAxisId="right" orientation="right" stroke="#71717a" tick={{ fontSize: 9 }} domain={[-100, -30]} />
                   <Tooltip contentStyle={{ backgroundColor: '#09090b', borderColor: '#27272a', fontSize: '10px' }} />
                   <Line yAxisId="left" type="monotone" dataKey="gyroYaw" name="Gyro Yaw (°/s)" stroke="#f59e0b" dot={false} isAnimationActive={false} strokeWidth={1.5} />

@@ -1,7 +1,7 @@
 #include "src/globals.h"
+#include "src/uploader.h"
 #include "src/sensors.h"
 #include "src/calibration.h"
-#include "src/uploader.h"
 #include "src/webserver.h"
 
 // --- Global instances definition ---
@@ -20,8 +20,9 @@ volatile int  lastPostCode = 0;
 volatile uint32_t lastPostAt   = 0;
 volatile uint32_t droppedPosts = 0;
 
-uint32_t lastSampleMs = 0, lastPostMs = 0, stoppedSince = 0, seq = 0;
+uint32_t lastSampleMs = 0, lastPostMs = 0, stoppedSince = 0, seq = 0, lastInstantSpikeMs = 0;
 bool recalibratedThisStop = false;
+
 
 // --- Helper WiFi Connection with Timeout ---
 void connectWiFi() {
@@ -55,15 +56,29 @@ void setup() {
   digitalWrite(pins::LED, LOW);
   pinMode(pins::MIC, INPUT);
 
-  // Configure I2C with clock speed (400kHz Fast Mode) & timeout
+  // Configure I2C with clock speed (100kHz Standard Mode) & timeout
   recoverI2CBus(pins::I2C_SDA, pins::I2C_SCL);
   Wire.setTimeOut(100);
   Wire.begin(pins::I2C_SDA, pins::I2C_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(100000);
   setupMPU();
 
   if (!LittleFS.begin(true)) {
     Serial.println("LittleFS Mount Failed");
+  } else {
+    if (LittleFS.exists("/spool.txt")) {
+      File f = LittleFS.open("/spool.txt", FILE_READ);
+      if (f) {
+        size_t sz = f.size();
+        if (sz == 0 || sz > 300000) {
+          f.close();
+          LittleFS.remove("/spool.txt");
+          Serial.println("[Spool] Reset empty or oversized spool file.");
+        } else {
+          f.close();
+        }
+      }
+    }
   }
 
   // Configure GPS Serial with enlarged 1024-byte RX buffer

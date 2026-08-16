@@ -56,21 +56,34 @@ export default function LiveTelemetryOscilloscope() {
           const mapped = [...data].reverse().map((r: any) => {
             const timeStr = r.ts ? new Date(r.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
             
+            const fsG = Number(r.accel_fs_g || 2);
+            const countsPerG = 32768 / fsG;
+            const fsDps = Number(r.gyro_fs_dps || 250);
+            const countsPerDps = 32768 / fsDps;
+
             // Accel Calibrated / Raw
-            const horiz = r.accel_cal?.horizontal_peak != null 
+            const rawHoriz = r.accel_cal?.horizontal_peak != null 
               ? Number(r.accel_cal.horizontal_peak) 
-              : r.accel_raw?.ax != null ? Number(r.accel_raw.ax) / 16384 : 0.0;
-            const mag = r.accel_cal?.magnitude_peak != null 
+              : (r.accel_raw?.x != null ? Number(r.accel_raw.x) : (r.accel_raw?.ax != null ? Number(r.accel_raw.ax) : 0.0));
+            const horiz = rawHoriz > 100 ? rawHoriz / countsPerG : rawHoriz;
+
+            const rawMag = r.accel_cal?.magnitude_peak != null 
               ? Number(r.accel_cal.magnitude_peak) 
-              : r.accel_raw?.ay != null ? Number(r.accel_raw.ay) / 16384 : 0.0;
-            const vert = r.accel_cal?.vertical_rms != null 
+              : (r.accel_raw?.y != null ? Number(r.accel_raw.y) : (r.accel_raw?.ay != null ? Number(r.accel_raw.ay) : 0.0));
+            const mag = rawMag > 100 ? rawMag / countsPerG : rawMag;
+
+            const rawVert = r.accel_cal?.vertical_rms != null 
               ? Number(r.accel_cal.vertical_rms) 
-              : r.accel_raw?.az != null ? Number(r.accel_raw.az) / 16384 : 1.0;
+              : (r.accel_raw?.z != null ? Number(r.accel_raw.z) : (r.accel_raw?.az != null ? Number(r.accel_raw.az) : countsPerG));
+            const vert = rawVert > 100 ? rawVert / countsPerG : rawVert;
             
             // Gyro Calibrated / Raw
-            const yaw = r.gyro_cal?.yaw_rate_deg_s != null 
-              ? Number(r.gyro_cal.yaw_rate_deg_s) 
-              : r.gyro_raw?.gz != null ? Number(r.gyro_raw.gz) / 131.0 : 0.0;
+            const rawYaw = r.gyro_cal?.yaw_rate_peak != null 
+              ? Number(r.gyro_cal.yaw_rate_peak) 
+              : (r.gyro_cal?.yaw_rate_deg_s != null 
+                  ? Number(r.gyro_cal.yaw_rate_deg_s) 
+                  : (r.gyro_raw?.z != null ? Number(r.gyro_raw.z) : (r.gyro_raw?.gz != null ? Number(r.gyro_raw.gz) : 0.0)));
+            const yaw = rawYaw > 10 ? rawYaw / countsPerDps : rawYaw;
 
             const rssi = r.wifi_rssi != null ? Number(r.wifi_rssi) : -65;
 

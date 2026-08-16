@@ -163,6 +163,43 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   });
 
   // -------------------------------------------------------------------------
+  // Live SSE: Real-time telemetry, driving events, and trip updates
+  // -------------------------------------------------------------------------
+  app.get('/events/live', (req, reply) => {
+    reply.hijack();
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache, no-transform');
+    reply.raw.setHeader('Connection', 'keep-alive');
+    reply.raw.setHeader('Access-Control-Allow-Origin', '*');
+    reply.raw.setHeader('X-Accel-Buffering', 'no');
+    reply.raw.flushHeaders?.();
+
+    reply.raw.write(': connected\n\n');
+
+    const unsubscribe = deps.pipeline.subscribe((msg) => {
+      try {
+        reply.raw.write(`data: ${JSON.stringify(msg)}\n\n`);
+      } catch {
+        // Stream may have closed
+      }
+    });
+
+    const keepalive = setInterval(() => {
+      try {
+        reply.raw.write(': ping\n\n');
+      } catch {
+        clearInterval(keepalive);
+      }
+    }, 15_000);
+
+    req.raw.on('close', () => {
+      clearInterval(keepalive);
+      unsubscribe();
+    });
+  });
+
+
+  // -------------------------------------------------------------------------
   // Admin: offline re-run over a date range (§5, §10 step 3).
   // -------------------------------------------------------------------------
   app.post<{ Body: { from?: string; to?: string; deviceId?: string } }>(

@@ -184,6 +184,60 @@ button:active:not(:disabled) {
   transform: scale(0.985);
 }
 
+/* Radar Pulse and Alert Flash animations */
+@keyframes radar-ripple {
+  0% {
+    transform: scale(0.25);
+    opacity: 1;
+  }
+  60% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(3.2);
+    opacity: 0;
+  }
+}
+
+@keyframes radar-ripple-fast {
+  0% {
+    transform: scale(0.25);
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+@keyframes flash-alert-banner {
+  0%, 100% {
+    background-color: rgba(159, 18, 57, 0.4);
+    border-color: rgba(244, 63, 94, 0.8);
+    box-shadow: 0 0 15px rgba(244, 63, 94, 0.3);
+  }
+  50% {
+    background-color: rgba(225, 29, 72, 0.7);
+    border-color: rgba(251, 113, 133, 1);
+    box-shadow: 0 0 25px rgba(244, 63, 94, 0.6);
+  }
+}
+
+.animate-radar-pulse {
+  animation: radar-ripple 2s cubic-bezier(0, 0.35, 0.2, 1) infinite;
+}
+
+.animate-radar-pulse-fast {
+  animation: radar-ripple-fast 1.3s cubic-bezier(0, 0.35, 0.2, 1) infinite;
+}
+
+.animate-alert-flash {
+  animation: flash-alert-banner 1s ease-in-out infinite;
+}
+
 /* Reduced motion accessibility */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
@@ -193,4 +247,5 @@ button:active:not(:disabled) {
     scroll-behavior: auto !important;
   }
 }
+
 

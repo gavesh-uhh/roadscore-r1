@@ -1,29 +1,43 @@
 #pragma once
 #include "globals.h"
 
-inline String buildPayload() {
+inline void enqueuePost(const String& body);
+
+inline String buildPayload(bool isInstantSpike = false) {
   JsonDocument doc;
   doc["device_id"] = DEVICE_ID;
   doc["seq"]       = seq;
   doc["uptime_ms"] = millis();
-  doc["window_ms"] = cfg::POST_INTERVAL_MS;
-  doc["samples"]   = win.samples;
+  doc["window_ms"] = isInstantSpike ? cfg::SAMPLE_INTERVAL_MS : cfg::POST_INTERVAL_MS;
+  doc["samples"]   = win.samples > 0 ? win.samples : 1;
+  if (isInstantSpike) {
+    doc["is_instant_spike"] = true;
+  }
 
-  if (gps.time.isValid() && gps.date.isValid()) {
+  bool tsSet = false;
+  if (gps.time.isValid() && gps.date.isValid() &&
+      gps.date.year() >= 2024 &&
+      gps.date.month() >= 1 && gps.date.month() <= 12 &&
+      gps.date.day() >= 1 && gps.date.day() <= 31) {
     char ts[25];
     snprintf(ts, sizeof(ts), "%04d-%02d-%02dT%02d:%02d:%02dZ",
              gps.date.year(), gps.date.month(), gps.date.day(),
              gps.time.hour(), gps.time.minute(), gps.time.second());
     doc["ts"] = ts;
-  } else {
+    tsSet = true;
+  }
+  
+  if (!tsSet) {
     time_t now;
     time(&now);
-    if (now > 1000000000) {
+    if (now > 1700000000) { // Valid NTP time (> Nov 2023)
       struct tm timeinfo;
       gmtime_r(&now, &timeinfo);
-      char ts[25];
-      strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
-      doc["ts"] = ts;
+      if (timeinfo.tm_year >= 124) { // Year >= 2024
+        char ts[25];
+        strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+        doc["ts"] = ts;
+      }
     }
   }
 
@@ -42,7 +56,7 @@ inline String buildPayload() {
 
   const uint32_t n = win.samples > 0 ? win.samples : 1;
   JsonObject acal = doc["accel_cal"].to<JsonObject>();
-  acal["vertical_rms"]    = int(sqrt(win.vertSumSq / n));
+  acal["vertical_rms"]    = isInstantSpike ? int(win.vertPeak) : int(sqrt(win.vertSumSq / n));
   acal["vertical_peak"]   = int(win.vertPeak);
   acal["horizontal_peak"] = int(win.horizPeak);
   acal["magnitude_peak"]  = int(win.accelMagPeak);
@@ -54,7 +68,7 @@ inline String buildPayload() {
   gcal["magnitude_peak"]  = int(win.gyroMagPeak);
 
   JsonObject mic = doc["mic"].to<JsonObject>();
-  mic["rms"]  = int(sqrt(win.micSumSq / n));
+  mic["rms"]  = isInstantSpike ? int(win.micPeak) : int(sqrt(win.micSumSq / n));
   mic["peak"] = win.micPeak;
 
   JsonObject g = doc["gps"].to<JsonObject>();
@@ -81,24 +95,73 @@ inline String buildPayload() {
   return out;
 }
 
+inline void triggerInstantSpikePush() {
+  String payload = buildPayload(true);
+  enqueuePost(payload);
+}
+
+
 inline void windowReset() { win = Window{}; }
 
+// Fast Supabase poster that supports both single object and batch JSON arrays
+inline int sendSupabasePost(WiFiClientSecure& client, HTTPClient& http, const char* payload, size_t length) {
+  if (!http.connected()) {
+    http.begin(client, SUPABASE_URL);
+    http.setReuse(true);
+    http.setTimeout(8000);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", SUPABASE_KEY);
+    http.addHeader("Authorization", "Bearer " SUPABASE_KEY);
+    http.addHeader("Prefer", "return=minimal");
+  }
+
+  int code = http.POST((uint8_t*)payload, length);
+  lastPostAt = millis();
+  lastPostCode = code;
+
+  if (code < 200 || code >= 300) {
+    http.end(); // Reset client connection on failure
+  }
+
+  return code;
+}
+
 inline void uploaderTask(void*) {
-  PostItem item;
-  bool hasItem = false;
+  WiFiClientSecure client;
+#ifdef SUPABASE_CA_CERT
+  if (SUPABASE_CA_CERT != nullptr) {
+    client.setCACert(SUPABASE_CA_CERT);
+  } else {
+    client.setInsecure();
+  }
+#else
+  client.setInsecure();
+#endif
+  client.setTimeout(8000);
+
+  HTTPClient http;
+  http.setReuse(true);
+
+  PostItem liveItem;
   uint32_t lastReconnectAttempt = 0;
 
   for (;;) {
-    hasItem = false;
-
-    // 1. If WiFi is NOT connected, do NOT pop items from the spool!
-    // Instead, receive incoming queue items, spool them to LittleFS safely, and attempt reconnection with backoff.
+    // 1. WiFi connectivity check
     if (WiFi.status() != WL_CONNECTED) {
-      if (xQueueReceive(postQueue, &item, pdMS_TO_TICKS(500)) == pdTRUE) {
-        if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+      http.end();
+      if (xQueueReceive(postQueue, &liveItem, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
           File f = LittleFS.open("/spool.txt", FILE_APPEND);
-          if (f) { f.println(item.body); f.close(); }
-          else droppedPosts++;
+          if (f) {
+            if (f.size() < 200000) {
+              f.println(liveItem.body);
+            } else {
+              droppedPosts++;
+            }
+            f.close();
+          } else {
+            droppedPosts++;
+          }
           xSemaphoreGive(fsMutex);
         } else {
           droppedPosts++;
@@ -112,39 +175,78 @@ inline void uploaderTask(void*) {
         lastPostAt   = now;
         WiFi.reconnect();
       }
-      delay(200);
+      delay(50);
       continue;
     }
 
-    // 2. WiFi is connected: Drain from LittleFS spool first (FIFO)
-    bool spooledFound = false;
-    if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+    // 2. LIVE QUEUE PRIORITY: Send live data immediately with zero backlog latency
+    if (xQueueReceive(postQueue, &liveItem, 0) == pdTRUE) {
+      if (strstr(liveItem.body, "2000-00-00") == nullptr && strlen(liveItem.body) >= 20) {
+        int code = sendSupabasePost(client, http, liveItem.body, strlen(liveItem.body));
+        if (code >= 200 && code < 300) {
+          Serial.printf("POST live -> %d\n", code);
+        } else {
+          Serial.printf("POST live failed (%d)\n", code);
+          if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            File f = LittleFS.open("/spool.txt", FILE_APPEND);
+            if (f) { f.println(liveItem.body); f.close(); }
+            xSemaphoreGive(fsMutex);
+          }
+        }
+      }
+      continue;
+    }
+
+    // 3. SPOOL BATCH DRAIN: When live queue is clear, drain spool in high-speed batches
+    bool hadSpool = false;
+    if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
       if (LittleFS.exists("/spool.txt")) {
         File spool = LittleFS.open("/spool.txt", FILE_READ);
         if (spool && spool.size() > 0) {
-          String spooledBody = spool.readStringUntil('\n');
-          spooledBody.trim();
-          File tmp = LittleFS.open("/tmp.txt", FILE_WRITE);
-          if (tmp) {
-            while (spool.available()) {
-              String line = spool.readStringUntil('\n');
-              line.trim();
-              if (line.length() > 0) tmp.println(line);
+          hadSpool = true;
+          String batchJson = "[";
+          int batchCount = 0;
+
+          while (spool.available() && batchCount < 10) {
+            String line = spool.readStringUntil('\n');
+            line.trim();
+            if (line.length() >= 20 && line.indexOf("device_id") >= 0 && line.indexOf("2000-00-00") < 0) {
+              if (batchCount > 0) batchJson += ",";
+              batchJson += line;
+              batchCount++;
             }
-            tmp.close();
           }
-          spool.close();
-          LittleFS.remove("/spool.txt");
-          if (LittleFS.exists("/tmp.txt") && LittleFS.open("/tmp.txt", FILE_READ).size() > 0) {
-            LittleFS.rename("/tmp.txt", "/spool.txt");
+          batchJson += "]";
+
+          if (batchCount > 0) {
+            int code = sendSupabasePost(client, http, batchJson.c_str(), batchJson.length());
+            if (code >= 200 && code < 300) {
+              Serial.printf("POST spool batch (%d rows) -> %d\n", batchCount, code);
+              if (spool.available()) {
+                File tmp = LittleFS.open("/tmp.txt", FILE_WRITE);
+                if (tmp) {
+                  while (spool.available()) {
+                    String line = spool.readStringUntil('\n');
+                    line.trim();
+                    if (line.length() > 0) tmp.println(line);
+                  }
+                  tmp.close();
+                }
+                spool.close();
+                LittleFS.remove("/spool.txt");
+                LittleFS.rename("/tmp.txt", "/spool.txt");
+              } else {
+                spool.close();
+                LittleFS.remove("/spool.txt");
+                Serial.println("[Spool] Fully drained offline spool.");
+              }
+            } else {
+              Serial.printf("POST spool batch failed (%d)\n", code);
+              spool.close();
+            }
           } else {
-            LittleFS.remove("/tmp.txt");
-          }
-          if (spooledBody.length() > 0) {
-            strncpy(item.body, spooledBody.c_str(), sizeof(item.body) - 1);
-            item.body[sizeof(item.body) - 1] = '\0';
-            hasItem = true;
-            spooledFound = true;
+            spool.close();
+            LittleFS.remove("/spool.txt");
           }
         } else {
           if (spool) spool.close();
@@ -154,78 +256,33 @@ inline void uploaderTask(void*) {
       xSemaphoreGive(fsMutex);
     }
 
-    // 3. If no spooled items, receive from the live FreeRTOS queue
-    if (!hasItem) {
-      if (xQueueReceive(postQueue, &item, pdMS_TO_TICKS(1000)) != pdTRUE) continue;
-      hasItem = true;
+    if (!hadSpool) {
+      delay(40);
     }
-
-    if (!hasItem) continue;
-
-    // 4. Perform HTTPS POST to Supabase
-    WiFiClientSecure client;
-#ifdef SUPABASE_CA_CERT
-    if (SUPABASE_CA_CERT != nullptr) {
-      client.setCACert(SUPABASE_CA_CERT);
-    } else {
-      client.setInsecure();
-    }
-#else
-    client.setInsecure();
-#endif
-    client.setTimeout(5000);
-
-    HTTPClient http;
-    if (http.begin(client, SUPABASE_URL)) {
-      http.addHeader("Content-Type", "application/json");
-      http.addHeader("apikey", SUPABASE_KEY);
-      http.addHeader("Authorization", "Bearer " SUPABASE_KEY);
-      http.addHeader("Prefer", "return=minimal");
-
-      lastPostCode = http.POST((uint8_t*)item.body, strlen(item.body));
-      lastPostAt   = millis();
-      if (lastPostCode > 0) {
-        Serial.printf("POST -> %d\n", lastPostCode);
-      } else {
-        Serial.printf("POST error: %s\n", http.errorToString(lastPostCode).c_str());
-        if (lastPostCode < 0) {
-          // Network error - re-spool for next attempt
-          if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-            File f = LittleFS.open("/spool.txt", FILE_APPEND);
-            if (f) { f.println(item.body); f.close(); }
-            xSemaphoreGive(fsMutex);
-          }
-          delay(1000);
-        }
-      }
-      http.end();
-    } else {
-      lastPostCode = -2;
-      Serial.println("HTTP begin failed (check SUPABASE_URL)");
-      if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-        File f = LittleFS.open("/spool.txt", FILE_APPEND);
-        if (f) { f.println(item.body); f.close(); }
-        xSemaphoreGive(fsMutex);
-      }
-      delay(1000);
-    }
-
-    // Yield between successive transmissions
-    delay(spooledFound ? 50 : 10);
   }
 }
 
 // Non-blocking hand-off with mutex protection
 inline void enqueuePost(const String& body) {
+  if (body.length() < 20 || body.indexOf("device_id") < 0 || body.indexOf("2000-00-00") >= 0) return;
   if (body.length() >= sizeof(PostItem::body)) { droppedPosts++; return; }
   PostItem item;
   strncpy(item.body, body.c_str(), sizeof(item.body) - 1);
   item.body[sizeof(item.body) - 1] = '\0';
+
   if (xQueueSend(postQueue, &item, 0) != pdTRUE) {
     if (xSemaphoreTake(fsMutex, 0) == pdTRUE) {
       File f = LittleFS.open("/spool.txt", FILE_APPEND);
-      if (f) { f.println(body); f.close(); }
-      else droppedPosts++;
+      if (f) {
+        if (f.size() < 200000) {
+          f.println(body);
+        } else {
+          droppedPosts++;
+        }
+        f.close();
+      } else {
+        droppedPosts++;
+      }
       xSemaphoreGive(fsMutex);
     } else {
       droppedPosts++;

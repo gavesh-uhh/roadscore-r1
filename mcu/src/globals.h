@@ -32,3 +32,4 @@ extern volatile uint32_t droppedPosts;
 extern uint32_t stoppedSince;
 extern bool recalibratedThisStop;
 extern uint32_t seq;
+extern uint32_t lastInstantSpikeMs;

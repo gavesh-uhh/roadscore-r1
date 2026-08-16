@@ -127,7 +127,7 @@ export const envSchema = z.object({
   //
   // The bottleneck is the DB write path, not detection — per row, detection is
   // single-digit microseconds. So the sink batches on whichever comes first:
-  WRITER_FLUSH_MS: intVar({ min: 1 }).default('250'),
+  WRITER_FLUSH_MS: intVar({ min: 1 }).default('100'),
   WRITER_MAX_ROWS: intVar({ min: 1, max: 100_000 }).default('500'),
 
   // --- Feature flags -------------------------------------------------------

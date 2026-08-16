@@ -12,6 +12,7 @@ export interface TelematicsEvent {
   occurred_at: string;
   magnitude?: number;
   magnitude_unit?: string;
+  confidence?: number;
   op_state?: OperationalState;
   attributed_to_driver?: boolean;
   driver_id?: string | null;
@@ -32,6 +33,9 @@ export interface DeductionItem {
   type: string;
   severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
   occurredAt: string;
+  magnitude?: number;
+  magnitudeUnit?: string;
+  confidence?: number;
   basePenalty: number;
   severityMultiplier: number;
   stateWeight: number;
@@ -67,6 +71,9 @@ export const EVENT_BASE_PENALTIES: Record<string, number> = {
   'driver.swerving': 10.0,
   'driver.avoidable_impact': 9.0,
   'driver.speeding_relative': 6.0,
+  'driver.speeding_for_conditions': 7.0,
+  'driver.excessive_idling': 4.0,
+  'driver.continuous_driving': 8.0,
   'engine.excessive_idle': 4.0,
   'depot.yard_shunt_impact': 10.0,
   'security.unauthorized_movement': 15.0,
@@ -144,6 +151,9 @@ export function calculateDriverDeductions(events: TelematicsEvent[], nowTs: numb
       type: evt.type,
       severity: evt.severity,
       occurredAt: evt.occurred_at,
+      magnitude: evt.magnitude,
+      magnitudeUnit: evt.magnitude_unit,
+      confidence: evt.confidence ?? 1.0,
       basePenalty,
       severityMultiplier,
       stateWeight,
@@ -270,9 +280,15 @@ export function calculateFactorRadarScores(events: TelematicsEvent[]): FactorRad
       corneringPen += basePen;
     } else if (evt.type.includes('speeding')) {
       speedPen += basePen;
-    } else if (evt.type.includes('pothole') || evt.type.includes('avoidable_impact')) {
+    } else if (evt.type.includes('avoidable_impact') || evt.type.includes('pothole')) {
       roadAdaptPen += basePen;
-    } else if (evt.type.includes('idle') || evt.type.includes('pto') || evt.type.includes('yard')) {
+    } else if (
+      evt.type.includes('idle') ||
+      evt.type.includes('continuous_driving') ||
+      evt.type.includes('fatigue') ||
+      evt.type.includes('pto') ||
+      evt.type.includes('yard')
+    ) {
       fatigueEcoPen += basePen;
     }
   }

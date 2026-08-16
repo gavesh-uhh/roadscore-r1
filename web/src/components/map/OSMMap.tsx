@@ -44,12 +44,24 @@ export interface MapHexagon {
   defectConfidence?: number;
 }
 
+export interface EventPulse {
+  id: string;
+  lat: number;
+  lon: number;
+  severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+  title?: string;
+  eventType?: string;
+  magnitude?: number;
+  occurredAt?: string;
+}
+
 export interface OSMMapProps {
   center?: [number, number];
   zoom?: number;
   markers?: MapMarker[];
   polylines?: MapPolyline[];
   hexagons?: MapHexagon[];
+  eventPulses?: EventPulse[];
   onMarkerClick?: (marker: MapMarker) => void;
   onMapClick?: (coords: [number, number]) => void;
   className?: string;

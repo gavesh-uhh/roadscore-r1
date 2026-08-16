@@ -21,15 +21,24 @@ inline void loadSavedCalibration() {
     calib.gravity[0] = prefs.getFloat("gx", 0.0f);
     calib.gravity[1] = prefs.getFloat("gy", 0.0f);
     calib.gravity[2] = prefs.getFloat("gz", cfg::GRAVITY_COUNTS);
-    calib.state      = CalibState::Calibrated;
-    calib.updatedAt  = millis();
-    Serial.printf("Loaded saved calibration from NVS: [%.0f, %.0f, %.0f]\n",
-                  calib.gravity[0], calib.gravity[1], calib.gravity[2]);
+    float mag = norm3(calib.gravity);
+    if (mag >= cfg::GRAVITY_COUNTS * 0.5f && mag <= cfg::GRAVITY_COUNTS * 1.5f) {
+      calib.state     = CalibState::Calibrated;
+      calib.updatedAt = millis();
+      Serial.printf("Loaded saved calibration from NVS: [%.0f, %.0f, %.0f]\n",
+                    calib.gravity[0], calib.gravity[1], calib.gravity[2]);
+    } else {
+      calib.gravity[0] = 0.0f;
+      calib.gravity[1] = 0.0f;
+      calib.gravity[2] = cfg::GRAVITY_COUNTS;
+      calib.state     = CalibState::Calibrating;
+      Serial.println("Discarded invalid/zero calibration from NVS.");
+    }
   }
   prefs.end();
 }
 
-// Learn the gravity vector, but only accept it when the unit is holding still.
+// Learn the gravity vector, but only accept it when the unit is holding still and sensor is responding.
 inline void attemptCalibration(CalibState reason) {
   float  sum[3] = {0, 0, 0};
   double magSum = 0, magSumSq = 0;
@@ -50,7 +59,7 @@ inline void attemptCalibration(CalibState reason) {
   float variance = (magSumSq / n) - (double(meanMag) * meanMag);
   float stddev   = variance > 0 ? sqrtf(variance) : 0;
 
-  if (stddev <= cfg::CALIB_MAX_STDDEV) {
+  if (stddev <= cfg::CALIB_MAX_STDDEV && meanMag >= (cfg::GRAVITY_COUNTS * 0.5f) && meanMag <= (cfg::GRAVITY_COUNTS * 1.5f)) {
     calib.gravity[0] = sum[0] / n;
     calib.gravity[1] = sum[1] / n;
     calib.gravity[2] = sum[2] / n;
@@ -64,7 +73,11 @@ inline void attemptCalibration(CalibState reason) {
     if (calib.state != CalibState::Calibrated) {
       calib.state = reason;
     }
-    Serial.printf("Calibration skipped (moving) stddev=%.0f\n", stddev);
+    if (meanMag < (cfg::GRAVITY_COUNTS * 0.5f)) {
+      Serial.printf("Calibration skipped (sensor offline or zero reading, mag=%.0f)\n", meanMag);
+    } else {
+      Serial.printf("Calibration skipped (moving) stddev=%.0f\n", stddev);
+    }
   }
 }
 

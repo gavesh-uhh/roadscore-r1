@@ -112,7 +112,11 @@ export class PgSink implements Sink {
 
   enqueueEvent(e: PersistableEvent): void {
     this.batch.events.push(e);
-    this.schedule();
+    if (e.severity === 'critical' || e.severity === 'high') {
+      void this.flush();
+    } else {
+      this.schedule();
+    }
   }
   enqueueTrip(t: Trip): void {
     this.batch.trips.push(t);
@@ -142,9 +146,8 @@ export class PgSink implements Sink {
    * rows can never be written out of order or twice concurrently.
    */
   async flush(): Promise<void> {
-    if (this.flushing !== null) {
+    while (this.flushing !== null) {
       await this.flushing;
-      return;
     }
     if (this.pendingRows() === 0) return;
 

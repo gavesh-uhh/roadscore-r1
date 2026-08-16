@@ -139,7 +139,7 @@ export function ScoreAuditDrawer({
                     return (
                       <div
                         key={`ded-${d.id}-${idx}`}
-                        className="p-2.5 rounded-md bg-zinc-900/60 border border-zinc-800 space-y-1.5"
+                        className="p-3 rounded-md bg-zinc-900/60 border border-zinc-800 space-y-2"
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5">
@@ -154,14 +154,37 @@ export function ScoreAuditDrawer({
                           </span>
                         </div>
 
-                        <div className="flex items-center justify-between text-[10px] text-zinc-400 font-mono pt-1 border-t border-zinc-800/60">
-                          <span className="flex items-center gap-1 text-zinc-500">
-                            <Clock size={10} />
-                            {new Date(d.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                          </span>
-                          <span>
-                            Severity: <strong className="text-zinc-300 uppercase">{d.severity}</strong> • Decay: {Math.round(d.decayFactor * 100)}%
-                          </span>
+                        <div className="text-[10px] text-zinc-400 font-mono space-y-1">
+                          <div className="flex items-center justify-between text-zinc-500">
+                            <span className="text-zinc-400">Key: <strong className="text-zinc-300 font-mono">{d.eventKey}</strong></span>
+                            <span className="flex items-center gap-1">
+                              <Clock size={10} />
+                              {new Date(d.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                          </div>
+
+                          {d.magnitude != null && (
+                            <div className="flex items-center justify-between text-zinc-400">
+                              <span>Physical Magnitude:</span>
+                              <span className="text-amber-400 font-bold">
+                                {d.magnitude} {d.magnitudeUnit || ''}
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-between text-zinc-400 pt-0.5">
+                            <span>Confidence Multiplier:</span>
+                            <span className="text-emerald-400 font-mono">
+                              {((d.confidence ?? 1.0) * 100).toFixed(0)}% ({d.confidence ?? 1.0}x)
+                            </span>
+                          </div>
+
+                          <div className="p-1.5 rounded bg-black/50 border border-zinc-800/80 text-[9px] text-zinc-400 font-mono mt-1">
+                            <span className="text-zinc-500 block text-[8px] uppercase tracking-wider">Score Reconciliation Formula:</span>
+                            <span>
+                              {d.basePenalty} pts × {d.severityMultiplier}x ({d.severity}) × {d.stateWeight}x ({d.opState}) × {(d.decayFactor * 100).toFixed(0)}% (decay) = <strong className="text-rose-400">-{d.netPenalty.toFixed(2)} pts</strong>
+                            </span>
+                          </div>
                         </div>
                       </div>
                     );

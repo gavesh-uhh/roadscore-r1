@@ -3,9 +3,14 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Header } from '@/components/common/Header';
-import { MapHexagon, MapMarker, MapPolyline, OSMMap } from '@/components/map/OSMMap';
+import { MapHexagon, MapMarker, MapPolyline, EventPulse, OSMMap } from '@/components/map/OSMMap';
 import { CockpitHUD } from '@/components/cockpit/CockpitHUD';
 import { createClient } from '@/lib/supabase/client';
+import {
+  useRealtimeStream,
+  TelemetryPacket,
+  DrivingEventPacket,
+} from '@/lib/realtime/useRealtimeStream';
 import { cellToBoundary } from 'h3-js';
 import {
   Activity,
@@ -18,6 +23,9 @@ import {
   Loader2,
   Gauge,
   X,
+  Zap,
+  Database,
+  Radio,
 } from 'lucide-react';
 import { getFleetData } from '@/lib/fleet/api';
 import type { DriverRecord } from '@/lib/fleet/types';
@@ -95,6 +103,13 @@ export default function UnifiedOperationsDesk() {
   const [telematicsEvents, setTelematicsEvents] = useState<TelematicsEvent[]>([]);
   const [decayTicker, setDecayTicker] = useState<number>(0);
   const [closingTripIds, setClosingTripIds] = useState<Set<string>>(new Set());
+
+  // Realtime Map Pulses & Instant Alert Visualizer State
+  const [activePulses, setActivePulses] = useState<EventPulse[]>([]);
+  const [latestCriticalAlert, setLatestCriticalAlert] = useState<{
+    event: EventRow;
+    receivedAt: number;
+  } | null>(null);
 
   // Selection & Map Focus State
   const [mapCenter, setMapCenter] = useState<[number, number]>([6.915, 79.852]);
@@ -269,6 +284,102 @@ export default function UnifiedOperationsDesk() {
     }
   }, [supabase, selectedTripId]);
 
+  // Auto-expire critical alert after 6s unless a new one arrives
+  useEffect(() => {
+    if (!latestCriticalAlert) return;
+    const timer = setTimeout(() => {
+      setLatestCriticalAlert(null);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [latestCriticalAlert]);
+
+  // Realtime Stream Handlers
+  const handleRealtimeTelemetry = useCallback((packet: TelemetryPacket) => {
+    const now = Date.now();
+    setTelemetry((prev) => {
+      const row: TelemetryRow = {
+        device_id: packet.device_id,
+        ts: packet.ts,
+        server_received_at: packet.server_received_at,
+        gps: packet.gps,
+        accel_cal: packet.accel_cal,
+      };
+      return [row, ...prev.filter((p) => p.device_id !== packet.device_id || p.ts !== packet.ts).slice(0, 99)];
+    });
+    setTotalTelemetryCount((prev) => prev + 1);
+    setPacketArrivals((prev) => [now, ...prev.slice(0, 49)]);
+  }, []);
+
+  const handleRealtimeDrivingEvent = useCallback(
+    (packet: DrivingEventPacket, rawPayload?: any) => {
+      const key = packet.event_key;
+      const newEvt: EventRow = {
+        event_key: key,
+        device_id: packet.device_id,
+        type: packet.type,
+        severity: packet.severity,
+        confidence: packet.confidence,
+        occurred_at: packet.occurred_at,
+        lat: packet.lat,
+        lon: packet.lon,
+        speed_kmh: packet.speed_kmh,
+        magnitude: packet.magnitude,
+        magnitude_unit: packet.magnitude_unit,
+      };
+
+      const newTelEvt: TelematicsEvent = {
+        id: rawPayload?.id || key,
+        event_key: key,
+        type: packet.type,
+        severity: packet.severity,
+        occurred_at: packet.occurred_at,
+        magnitude: packet.magnitude ?? undefined,
+        magnitude_unit: packet.magnitude_unit ?? undefined,
+        attributed_to_driver: rawPayload?.attributed_to_driver ?? true,
+        driver_id: rawPayload?.driver_id,
+        device_id: packet.device_id,
+      };
+
+      setEvents((prev) => [newEvt, ...prev.filter((e) => e.event_key !== key)].slice(0, 40));
+      setTelematicsEvents((prev) => [newTelEvt, ...prev.filter((e) => (e.event_key || e.id) !== key)]);
+
+      // Radar pulse & instant alert banner for high/critical events
+      if (packet.severity === 'critical' || packet.severity === 'high') {
+        setLatestCriticalAlert({ event: newEvt, receivedAt: Date.now() });
+
+        if (packet.lat && packet.lon) {
+          const pulse: EventPulse = {
+            id: `pulse-${key}-${Date.now()}`,
+            lat: packet.lat,
+            lon: packet.lon,
+            severity: packet.severity,
+            title: formatEventType(packet.type).label,
+            eventType: packet.type,
+            magnitude: packet.magnitude ?? undefined,
+            occurredAt: packet.occurred_at,
+          };
+          setActivePulses((prev) => [pulse, ...prev.slice(0, 8)]);
+        }
+      }
+
+      loadDatabaseData();
+    },
+    [loadDatabaseData]
+  );
+
+  const handleRealtimeTripChange = useCallback(() => {
+    loadDatabaseData();
+  }, [loadDatabaseData]);
+
+  // Dual-Feed Realtime Hook: Fastify SSE (<10ms) with Supabase CDC Fallback
+  const { feedMode, statusBadgeText, latencyMs, isSseActive } = useRealtimeStream({
+    supabase,
+    onTelemetry: handleRealtimeTelemetry,
+    onDrivingEvent: handleRealtimeDrivingEvent,
+    onTripChange: handleRealtimeTripChange,
+    enabled: isMounted,
+  });
+
   useEffect(() => {
     setIsMounted(true);
     loadDatabaseData();
@@ -278,84 +389,15 @@ export default function UnifiedOperationsDesk() {
       setDecayTicker((t) => t + 1);
     }, 2500);
 
-    // Supabase Realtime Subscriptions directly from DB
-    const channel = supabase
-      .channel('unified_ops_room')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'telemetry' },
-        (payload) => {
-          const now = Date.now();
-          setTelemetry((prev) => [payload.new as TelemetryRow, ...prev.slice(0, 99)]);
-          setTotalTelemetryCount((prev) => prev + 1);
-          setPacketArrivals((prev) => [now, ...prev.slice(0, 49)]);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'driving_events' },
-        (payload) => {
-          const raw = (payload.new || payload.old) as any;
-          if (!raw) return;
-          const key = String(raw.event_key || raw.id || '');
-
-          if (payload.eventType === 'DELETE') {
-            setEvents((prev) => prev.filter((e) => e.event_key !== key));
-            setTelematicsEvents((prev) => prev.filter((e) => (e.event_key || e.id) !== key));
-          } else {
-            const newEvt: EventRow = {
-              event_key: key,
-              device_id: String(raw.device_id || ''),
-              type: String(raw.type || ''),
-              severity: (raw.severity as any) || 'info',
-              confidence: Number(raw.confidence ?? 0),
-              occurred_at: String(raw.occurred_at || new Date().toISOString()),
-              lat: raw.lat != null ? Number(raw.lat) : null,
-              lon: raw.lon != null ? Number(raw.lon) : null,
-              speed_kmh: raw.speed_kmh != null ? Number(raw.speed_kmh) : null,
-              magnitude: raw.magnitude != null ? Number(raw.magnitude) : null,
-              magnitude_unit: raw.magnitude_unit ? String(raw.magnitude_unit) : null,
-            };
-
-            const newTelEvt: TelematicsEvent = {
-              id: raw.id,
-              event_key: key,
-              type: raw.type,
-              severity: raw.severity,
-              occurred_at: raw.occurred_at || new Date().toISOString(),
-              magnitude: raw.magnitude != null ? Number(raw.magnitude) : undefined,
-              magnitude_unit: raw.magnitude_unit || undefined,
-              attributed_to_driver: raw.attributed_to_driver,
-              driver_id: raw.driver_id,
-              device_id: raw.device_id,
-            };
-
-            // Reactively update in-memory events for instantaneous score update
-            setEvents((prev) => [newEvt, ...prev.filter((e) => e.event_key !== key)].slice(0, 40));
-            setTelematicsEvents((prev) => [newTelEvt, ...prev.filter((e) => (e.event_key || e.id) !== key)]);
-          }
-
-          // Also trigger background DB reload to maintain consistency
-          loadDatabaseData();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'trips' },
-        () => loadDatabaseData()
-      )
-      .subscribe();
-
     const interval = setInterval(() => {
       loadDatabaseData();
     }, 4000);
 
     return () => {
-      supabase.removeChannel(channel);
       clearInterval(interval);
       clearInterval(tickTimer);
     };
-  }, [loadDatabaseData, supabase]);
+  }, [loadDatabaseData]);
 
   // Construct Map Markers directly from DB records
   const mapMarkers: MapMarker[] = [];
@@ -470,7 +512,7 @@ export default function UnifiedOperationsDesk() {
 
       {/* Top Status Bar */}
       <div className="bg-zinc-950 border-b border-zinc-800 px-4 py-2 flex items-center justify-between text-xs shrink-0 select-none">
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-5">
           {/* Stream Status Badge */}
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2 shrink-0">
@@ -506,6 +548,31 @@ export default function UnifiedOperationsDesk() {
             </span>
           </div>
 
+          {/* Dual-Feed Active Mode Badge */}
+          {feedMode === 'sse' ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/80 text-emerald-300 font-mono text-[11px] font-bold shadow-[0_0_10px_rgba(16,185,129,0.25)]">
+              <Zap size={12} className="text-emerald-400 fill-emerald-400 animate-pulse" />
+              <span>FAST-PATH ACTIVE (SSE)</span>
+              {latencyMs !== null && (
+                <span className="text-[10px] text-emerald-400/80 font-normal ml-0.5">(&lt;10ms)</span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-amber-950/70 border border-amber-600/70 text-amber-300 font-mono text-[11px] font-bold shadow-[0_0_10px_rgba(245,158,11,0.2)]">
+              <Database size={12} className="text-amber-400" />
+              <span>CLOUD CDC ACTIVE</span>
+              <span className="text-[10px] text-amber-400/80 font-normal ml-0.5">(Supabase)</span>
+            </div>
+          )}
+
+          {/* Real-time Spike Alert Badge in Top Status Bar */}
+          {latestCriticalAlert && (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-rose-950/90 border border-rose-500 text-rose-300 font-mono text-[10px] font-bold animate-alert-flash">
+              <AlertTriangle size={11} className="text-rose-400 animate-bounce" />
+              <span>CRITICAL EVENT SPIKE</span>
+            </div>
+          )}
+
           <div className="flex items-center gap-2">
             <span className="text-zinc-400 font-medium">Active Incidents</span>
             <span className="font-mono font-bold text-amber-400 ml-1">{events.length} Events</span>
@@ -517,8 +584,9 @@ export default function UnifiedOperationsDesk() {
           </div>
         </div>
 
-        <div className="text-[11px] text-zinc-500 font-mono">
-          Real-time Telematics Feed
+        <div className="text-[11px] text-zinc-500 font-mono flex items-center gap-2">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+          <span>60 FPS Dead-Reckoning</span>
         </div>
       </div>
 
@@ -697,6 +765,7 @@ export default function UnifiedOperationsDesk() {
               zoom={13}
               markers={mapMarkers}
               hexagons={mapHexagons}
+              eventPulses={activePulses}
               onMarkerClick={(m) => {
                 const evt = events.find((e) => e.event_key === m.id.replace('evt-', ''));
                 if (evt) setSelectedEvent(evt);
@@ -778,6 +847,60 @@ export default function UnifiedOperationsDesk() {
               <span className="text-[11px] text-zinc-400 font-mono">{filteredEvents.length} Events</span>
             </div>
           </div>
+
+          {/* Real-time Critical Event Pulse Banner */}
+          <AnimatePresence>
+            {latestCriticalAlert && (
+              <motion.div
+                initial={{ opacity: 0, height: 0, y: -8 }}
+                animate={{ opacity: 1, height: 'auto', y: 0 }}
+                exit={{ opacity: 0, height: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+                className="m-2 p-2.5 rounded-md border border-rose-500/80 bg-gradient-to-r from-rose-950/90 via-rose-900/60 to-zinc-950 text-white shadow-lg animate-alert-flash shrink-0"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <AlertTriangle size={14} className="text-rose-400 mt-0.5 shrink-0 animate-bounce" />
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-1.5 font-bold text-white text-[11px] font-sans">
+                        <span className="truncate">{formatEventType(latestCriticalAlert.event.type).label}</span>
+                        <span className="px-1 py-0.2 rounded text-[8px] font-mono uppercase bg-rose-900 text-rose-200 border border-rose-700">
+                          {latestCriticalAlert.event.severity}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-rose-200 font-mono truncate">
+                        Device: {latestCriticalAlert.event.device_id} | Mag: {latestCriticalAlert.event.magnitude ?? 'N/A'}{latestCriticalAlert.event.magnitude_unit ?? 'g'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setLatestCriticalAlert(null)}
+                    className="text-zinc-400 hover:text-white p-0.5 rounded cursor-pointer shrink-0"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+
+                {latestCriticalAlert.event.lat && latestCriticalAlert.event.lon && (
+                  <div className="mt-2 pt-1.5 border-t border-rose-800/60 flex items-center justify-between text-[9px] font-mono text-rose-300">
+                    <span>{latestCriticalAlert.event.lat.toFixed(4)}, {latestCriticalAlert.event.lon.toFixed(4)}</span>
+                    <button
+                      onClick={() => {
+                        if (latestCriticalAlert.event.lat && latestCriticalAlert.event.lon) {
+                          setMapCenter([latestCriticalAlert.event.lat, latestCriticalAlert.event.lon]);
+                          setSelectedEvent(latestCriticalAlert.event);
+                        }
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-rose-900/80 hover:bg-rose-800 text-white border border-rose-700 cursor-pointer font-sans text-[9px] flex items-center gap-1"
+                    >
+                      <MapPin size={9} />
+                      <span>Locate on Map</span>
+                    </button>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-1.5 min-h-0">
             {filteredEvents.length === 0 ? (

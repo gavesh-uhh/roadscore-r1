@@ -28,14 +28,66 @@ inline void recoverI2CBus(int sdaPin, int sclPin) {
   }
 }
 
-inline void setupMPU() {
-  mpu.initialize();
+inline bool setupMPU() {
+  Serial.println("\n--- Scanning I2C Bus ---");
+  uint8_t count = 0;
+  uint8_t detectedAddr = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("  [I2C] Found device at address 0x%02X\n", addr);
+      count++;
+      if (addr == 0x68 || addr == 0x69) {
+        detectedAddr = addr;
+      }
+    }
+  }
+  if (count == 0) {
+    Serial.println("  [I2C] No devices responded! Check SDA (GPIO 21), SCL (GPIO 22), 3V3/5V, and GND.");
+    return false;
+  }
+
+  if (detectedAddr == 0) {
+    Serial.println("  [I2C] MPU6050 not found at 0x68 or 0x69!");
+    return false;
+  }
+
+  if (detectedAddr == 0x69) {
+    Serial.println("  [I2C] MPU6050 detected at alternate address 0x69 (AD0 is HIGH/floating)");
+    mpu = MPU6050(0x69);
+  } else {
+    mpu = MPU6050(0x68);
+  }
+
+  Serial.println("--- Initializing MPU6050 ---");
+  mpu.reset();
+  delay(50);
   mpu.setSleepEnabled(false);
-  delay(100);
+  mpu.setClockSource(MPU6050_CLOCK_PLL_XGYRO);
+  delay(50);
   mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
   mpu.setFullScaleGyroRange(MPU6050_GYRO_FS_250);
-  bool ok = mpu.testConnection();
-  Serial.println(ok ? "MPU6050 OK @ 0x68" : "MPU6050 FAILED (check SDA/SCL wiring)");
+
+  bool connOk = mpu.testConnection();
+  bool isSleeping = mpu.getSleepEnabled();
+  uint8_t devId = mpu.getDeviceID();
+
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  float mag = sqrtf(float(ax) * ax + float(ay) * ay + float(az) * az);
+
+  Serial.printf("  Device ID (WHO_AM_I): 0x%02X\n", devId);
+  Serial.printf("  Power State: %s\n", isSleeping ? "ASLEEP (Bit 6 set)" : "AWAKE (Active)");
+  Serial.printf("  Raw Reading: Accel=[%d, %d, %d] (mag: %.0f LSB, expected ~16384)\n", ax, ay, az, mag);
+  Serial.printf("               Gyro=[%d, %d, %d]\n", gx, gy, gz);
+
+  if (connOk && !isSleeping && mag > 5000.0f) {
+    Serial.println(">> MPU6050 STATUS: ACTIVE AND WOKE UP SUCCESSFULLY! <<\n");
+    return true;
+  } else {
+    Serial.println(">> MPU6050 STATUS: FAILED (Check SDA/SCL, AD0 to GND, and VCC) <<\n");
+    return false;
+  }
 }
 
 inline void sampleSensors() {
@@ -73,8 +125,19 @@ inline void sampleSensors() {
   win.micSumSq += double(micAC) * micAC;
 
   win.samples++;
+
+  // Inline spike detection: > 2.5g (40960 counts at 2g scale, or > 2.5 * cfg::GRAVITY_COUNTS)
+  // and at least 500ms has elapsed since the last instant push.
+  constexpr float SPIKE_THRESHOLD = 2.5f * cfg::GRAVITY_COUNTS;
+  uint32_t now = millis();
+  if ((win.vertPeak > SPIKE_THRESHOLD || win.accelMagPeak > SPIKE_THRESHOLD) &&
+      (now - lastInstantSpikeMs >= 500)) {
+    lastInstantSpikeMs = now;
+    triggerInstantSpikePush();
+  }
 }
 
 inline void serviceGPS() {
   while (GPSSerial.available()) gps.encode(GPSSerial.read());
 }
+

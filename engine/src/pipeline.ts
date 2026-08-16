@@ -64,6 +64,13 @@ export interface PipelineStats {
   rejections: Map<string, number>;
 }
 
+export type BroadcastPayload =
+  | { type: 'telemetry'; data: RawRow }
+  | { type: 'event'; data: PersistableEvent }
+  | { type: 'trip'; data: Trip };
+
+export type BroadcastListener = (payload: BroadcastPayload) => void;
+
 /**
  * Processes rows for the whole fleet, one device at a time per device.
  */
@@ -72,6 +79,7 @@ export class Pipeline {
   /** Per-device promise chain, enforcing sequential processing (§5). */
   private readonly queues = new Map<string, Promise<void>>();
   private readonly evaluator: PredictionEvaluator;
+  private readonly listeners = new Set<BroadcastListener>();
   readonly map: RoadMap;
   readonly defects = new Map<string, RoadDefect>();
 
@@ -96,6 +104,25 @@ export class Pipeline {
     this.stateTtlMs = opts.stateTtlMs ?? 120_000;
     // The §6.5 speeding detectors read fleet statistics through this lookup.
     setCellStats(this.map);
+  }
+
+  /** Subscribe to live real-time pipeline events (telemetry, events, trips). */
+  subscribe(listener: BroadcastListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /** Broadcast an update to all connected listeners. */
+  broadcast(payload: BroadcastPayload): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(payload);
+      } catch (err) {
+        this.opts.log.error({ err }, 'broadcast listener threw');
+      }
+    }
   }
 
   /** Load known defects at startup so prediction works from the first row. */
@@ -169,12 +196,14 @@ export class Pipeline {
     }
     this.stats.rowsAccepted++;
     const sample = res.sample;
+    this.broadcast({ type: 'telemetry', data: row });
 
     // --- trips (§4) --------------------------------------------------------
     const transition = updateTrip(st, sample, cfg, res.rebooted);
     if (transition.opened !== undefined) {
       this.stats.tripsOpened++;
       sink.enqueueTrip(transition.opened);
+      this.broadcast({ type: 'trip', data: transition.opened });
       // A new trip means a fresh set of hazard warnings (§7.4 step 6) and fresh trip events.
       st.predictedCells.clear();
       st.tripEvents = [];
@@ -183,6 +212,7 @@ export class Pipeline {
     if (transition.closed !== undefined) {
       this.stats.tripsClosed++;
       sink.enqueueTrip(transition.closed);
+      this.broadcast({ type: 'trip', data: transition.closed });
       const tripScore = scoreTrip(
         { trip: transition.closed, events: st.tripEvents, calibrationStaleEvents: st.calibrationStaleCount },
         cfg,
@@ -250,6 +280,7 @@ export class Pipeline {
         }
       }
       this.stats.eventsEmitted++;
+      this.broadcast({ type: 'event', data: p });
     }
 
     // --- predict (§7.4) ----------------------------------------------------
@@ -305,6 +336,7 @@ export class Pipeline {
       if (trip !== null) {
         this.stats.tripsClosed++;
         this.opts.sink.enqueueTrip(trip);
+        this.broadcast({ type: 'trip', data: trip });
         const tripScore = scoreTrip(
           { trip, events: st.tripEvents, calibrationStaleEvents: st.calibrationStaleCount },
           this.opts.cfg,
@@ -335,6 +367,7 @@ export class Pipeline {
     if (trip !== null) {
       this.stats.tripsClosed++;
       this.opts.sink.enqueueTrip(trip);
+      this.broadcast({ type: 'trip', data: trip });
       const tripScore = scoreTrip(
         { trip, events: st.tripEvents, calibrationStaleEvents: st.calibrationStaleCount },
         this.opts.cfg,
@@ -360,6 +393,7 @@ export class Pipeline {
       if (trip !== null) {
         this.stats.tripsClosed++;
         this.opts.sink.enqueueTrip(trip);
+        this.broadcast({ type: 'trip', data: trip });
         const tripScore = scoreTrip(
           { trip, events: st.tripEvents, calibrationStaleEvents: st.calibrationStaleCount },
           this.opts.cfg,

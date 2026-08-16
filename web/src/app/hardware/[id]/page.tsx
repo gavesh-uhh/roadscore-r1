@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import { DeviceHealthHeader } from '@/components/hardware/DeviceHealthHeader';
 import { RawTelemetryTable, RawTelemetryRow } from '@/components/hardware/RawTelemetryTable';
 import { RawPayloadDrawer } from '@/components/hardware/RawPayloadDrawer';
-import { ArrowLeft, Activity, Layers } from 'lucide-react';
+import { ArrowLeft, Activity, Layers, Radio } from 'lucide-react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -32,11 +32,14 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
   });
 
   const [telemetry, setTelemetry] = useState<RawTelemetryRow[]>([]);
+  const [latestRaw, setLatestRaw] = useState<any | null>(null);
   const [selectedRowPayload, setSelectedRowPayload] = useState<RawTelemetryRow | null>(null);
 
   const supabase = createClient();
 
   useEffect(() => {
+    let isMounted = true;
+
     async function loadDeviceAndTelemetry() {
       try {
         // 1. Fetch specific device metadata
@@ -46,7 +49,7 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
           .eq('device_id', deviceId)
           .maybeSingle();
 
-        if (devData) {
+        if (devData && isMounted) {
           setDevice(devData);
         }
 
@@ -56,26 +59,44 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
           .select('*')
           .eq('device_id', deviceId)
           .order('server_received_at', { ascending: false })
-          .limit(50);
+          .limit(60);
 
-        if (telData) {
+        if (telData && isMounted) {
+          if (telData.length > 0) {
+            setLatestRaw(telData[0]);
+          }
+
           const mappedTelemetry: RawTelemetryRow[] = telData.map((t: any, i: number) => {
-            const vertRms = Number(t.accel_cal?.vertical_rms ?? t.calibrated_accel?.a_vert ?? 1.0);
-            const horizPeak = Number(t.accel_cal?.horizontal_peak ?? t.calibrated_accel?.a_long ?? 0.0);
-            const magPeak = Number(t.accel_cal?.magnitude_peak ?? t.calibrated_accel?.peak_g ?? 1.0);
-            const yaw = Number(t.gyro_cal?.yaw_rate_deg_s ?? t.yaw_rate ?? 0.0);
-            const micVal = Number(t.mic?.rms ?? t.mic_rms ?? 1100);
+            const fsG = Number(t.accel_fs_g || 2);
+            const countsPerG = 32768 / fsG;
+            const fsDps = Number(t.gyro_fs_dps || 250);
+            const countsPerDps = 32768 / fsDps;
+
+            const rawVertRms = Number(t.accel_cal?.vertical_rms ?? t.calibrated_accel?.a_vert ?? 0);
+            const vertRms = rawVertRms > 100 ? rawVertRms / countsPerG : rawVertRms;
+
+            const rawHorizPeak = Number(t.accel_cal?.horizontal_peak ?? t.calibrated_accel?.a_long ?? 0.0);
+            const horizPeak = rawHorizPeak > 100 ? rawHorizPeak / countsPerG : rawHorizPeak;
+
+            const rawMagPeak = Number(t.accel_cal?.magnitude_peak ?? t.calibrated_accel?.peak_g ?? 0);
+            const magPeak = rawMagPeak > 100 ? rawMagPeak / countsPerG : rawMagPeak;
+
+            const rawYaw = Number(t.gyro_cal?.yaw_rate_peak ?? t.gyro_cal?.yaw_rate_deg_s ?? t.yaw_rate ?? 0.0);
+            const yaw = rawYaw > 10 ? rawYaw / countsPerDps : rawYaw;
+            const micVal = Number(t.mic?.rms ?? t.mic_rms ?? 0);
+
+            const hasFix = Boolean(t.gps?.fix === true || (t.gps?.lat != null && t.gps?.lat !== 0));
 
             return {
               id: t.id,
-              seq: Number(t.seq || i + 1),
+              seq: Number(t.seq ?? i + 1),
               device_id: String(t.device_id || deviceId),
-              uptime_ms: Number(t.uptime_ms || i * 1000),
-              t_sec: Number(t.t_sec || Math.floor(new Date(t.ts || t.server_received_at || Date.now()).getTime() / 1000)),
+              uptime_ms: Number(t.uptime_ms ?? 0),
+              t_sec: Number(t.t_sec || (t.ts ? Math.floor(new Date(t.ts).getTime() / 1000) : 0)),
               accel_raw: {
-                x: Number(t.accel_raw?.ax ?? t.accel_raw?.x ?? 0),
-                y: Number(t.accel_raw?.ay ?? t.accel_raw?.y ?? 0),
-                z: Number(t.accel_raw?.az ?? t.accel_raw?.z ?? 16384),
+                x: Number(t.accel_raw?.x ?? t.accel_raw?.ax ?? 0),
+                y: Number(t.accel_raw?.y ?? t.accel_raw?.ay ?? 0),
+                z: Number(t.accel_raw?.z ?? t.accel_raw?.az ?? 0),
               },
               calibrated_accel: {
                 a_long: horizPeak,
@@ -87,18 +108,18 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
               yaw_rate: yaw,
               mic_rms: micVal,
               gps: {
-                speed_kmh: Number(t.gps?.speed_kmh || 0),
-                heading_deg: Number(t.gps?.heading || t.gps?.heading_deg || 0),
-                lat: Number(t.gps?.lat || 6.9271),
-                lon: Number(t.gps?.lon || 79.8612),
-                sats: Number(t.gps?.sats || 8),
-                hdop: Number(t.gps?.hdop || 0.9),
+                speed_kmh: Number(t.gps?.speed_kmh ?? 0),
+                heading_deg: Number(t.gps?.heading ?? t.gps?.heading_deg ?? 0),
+                lat: Number(t.gps?.lat ?? 0),
+                lon: Number(t.gps?.lon ?? 0),
+                sats: Number(t.gps?.sats ?? 0),
+                hdop: Number(t.gps?.hdop ?? 0),
               },
               flags: {
-                gps_fix: Boolean(t.gps?.fix ?? (t.gps?.lat != null)),
-                calibrated: Boolean(t.accel_cal != null || t.calibrated_accel != null),
-                imu_ready: true,
-                mic_active: true,
+                gps_fix: hasFix,
+                calibrated: String(t.calibration?.state ?? '').toLowerCase() === 'calibrated' || Boolean(t.accel_cal),
+                imu_ready: t.accel_raw != null,
+                mic_active: t.mic != null,
                 storage_ok: true,
               },
               raw_payload: t,
@@ -113,6 +134,26 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
     }
 
     loadDeviceAndTelemetry();
+
+    // Subscribe to realtime updates for this device
+    const channel = supabase
+      .channel(`device_telemetry_${deviceId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'telemetry', filter: `device_id=eq.${deviceId}` },
+        () => {
+          loadDeviceAndTelemetry();
+        }
+      )
+      .subscribe();
+
+    const interval = setInterval(loadDeviceAndTelemetry, 1500);
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, [deviceId, supabase]);
 
   const waveformChartData = telemetry.map((row) => ({
@@ -121,6 +162,16 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
     a_vert_rms: row.calibrated_accel.rms_g,
     a_vert_peak: row.calibrated_accel.peak_g,
   }));
+
+  // Parse actual live values from the latest telemetry frame
+  const latestCalib = latestRaw?.calibration;
+  const gravityRef = Array.isArray(latestCalib?.gravity_ref)
+    ? { x: latestCalib.gravity_ref[0] ?? 0, y: latestCalib.gravity_ref[1] ?? 0, z: latestCalib.gravity_ref[2] ?? 16384 }
+    : (latestCalib?.gravity_ref ?? { x: 0, y: 0, z: 16384 });
+  const calibState = (latestCalib?.state ?? (latestRaw?.accel_cal ? 'calibrated' : 'calibrating')) as any;
+  const liveRssi = latestRaw?.wifi_rssi ?? -99;
+  const liveDropped = latestRaw?.dropped_posts ?? 0;
+  const liveFw = latestRaw?.fw_version ?? '1.0.0-mcu';
 
   return (
     <div className="flex flex-col min-h-screen bg-black text-white font-sans text-xs">
@@ -147,7 +198,14 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
 
       <div className="p-5 space-y-4 w-full">
         {/* Top Pane: ESP32 Health & IMU Calibration Header */}
-        <DeviceHealthHeader device={device} />
+        <DeviceHealthHeader
+          device={device}
+          wifiRssiDbm={liveRssi}
+          droppedPosts={liveDropped}
+          firmwareVersion={liveFw}
+          gravityVector={gravityRef}
+          calibrationState={calibState}
+        />
 
         {/* Oscilloscope Waveform Scope */}
         <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3">

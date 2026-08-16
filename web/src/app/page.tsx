@@ -758,8 +758,10 @@ export default function UnifiedOperationsDesk() {
 
           {/* Active Trips Directory */}
           <div className="px-3 py-2 bg-zinc-900/60 font-semibold text-white flex items-center justify-between border-b border-zinc-800 shrink-0">
-            <span>Active Trips</span>
-            <span className="text-[11px] text-zinc-400 font-mono">{trips.length} Routes</span>
+            <span>Recent Trips</span>
+            <span className="text-[11px] text-zinc-400 font-mono">
+              {trips.filter((t) => (String(t.status || '').toLowerCase() === 'open' || !t.ended_at) && String(t.status || '').toLowerCase() !== 'closed' && String(t.status || '').toLowerCase() !== 'abandoned').length} Active / {trips.length} Total
+            </span>
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">

@@ -282,6 +282,21 @@ async function main(): Promise<void> {
     log.warn('no devices registered — every incoming row will be rejected until `devices` is seeded');
   }
 
+  // Clean up any orphaned open trips from previous killed sessions
+  try {
+    const orphaned = await db`
+      UPDATE public.trips 
+      SET status = 'closed', ended_at = coalesce(ended_at, now()) 
+      WHERE status = 'open' AND ended_at IS NULL
+      RETURNING id
+    `;
+    if (orphaned.length > 0) {
+      log.info({ closedCount: orphaned.length }, 'closed orphaned open trips from previous engine run');
+    }
+  } catch (err) {
+    log.warn({ err }, 'failed to clean up orphaned trips on boot');
+  }
+
   const map = await loadRoadMap(db, cfg, log);
   const pipeline = new Pipeline({ cfg, sink, log, devices, map, stateTtlMs: env.DEVICE_STATE_TTL_MS });
   pipeline.loadDefects(await loadDefects(db, log));

@@ -7,7 +7,8 @@ import { createClient } from '@/lib/supabase/client';
 import { DeviceHealthHeader } from '@/components/hardware/DeviceHealthHeader';
 import { RawTelemetryTable, RawTelemetryRow } from '@/components/hardware/RawTelemetryTable';
 import { RawPayloadDrawer } from '@/components/hardware/RawPayloadDrawer';
-import { ArrowLeft, Activity, Layers, Radio } from 'lucide-react';
+import { ArrowLeft, Activity, Layers, Radio, MapPin, Navigation, Satellite } from 'lucide-react';
+import { OSMMap, MapMarker, MapPolyline } from '@/components/map/OSMMap';
 import {
   ResponsiveContainer,
   LineChart,
@@ -217,6 +218,64 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
   const liveFw = latestRaw?.fw_version ?? '1.0.0-mcu';
   const freeHeap = latestRaw?.free_heap_kb ?? latestRaw?.heap_free_kb ?? device.free_heap_kb ?? 184;
 
+  // Extract latest valid GPS location
+  const latestWithFix = telemetry.find(
+    (t) => t.flags.gps_fix && t.gps.lat !== 0 && t.gps.lon !== 0 && !isNaN(t.gps.lat) && !isNaN(t.gps.lon)
+  );
+
+  const currentGps = latestWithFix
+    ? latestWithFix.gps
+    : (latestRaw?.gps?.lat && latestRaw?.gps?.lon && Number(latestRaw.gps.lat) !== 0
+        ? {
+            lat: Number(latestRaw.gps.lat),
+            lon: Number(latestRaw.gps.lon),
+            speed_kmh: Number(latestRaw.gps.speed_kmh ?? 0),
+            heading_deg: Number(latestRaw.gps.heading ?? 0),
+            sats: Number(latestRaw.gps.sats ?? 0),
+            hdop: Number(latestRaw.gps.hdop ?? 0),
+          }
+        : null);
+
+  const hasGpsLocation = Boolean(currentGps && currentGps.lat !== 0 && currentGps.lon !== 0);
+
+  const mapCenter: [number, number] = hasGpsLocation && currentGps
+    ? [currentGps.lat, currentGps.lon]
+    : [6.9271, 79.8612];
+
+  const mapZoom = hasGpsLocation ? 16 : 10;
+
+  const deviceMarkers: MapMarker[] = hasGpsLocation && currentGps
+    ? [
+        {
+          id: `device-${deviceId}`,
+          lat: currentGps.lat,
+          lon: currentGps.lon,
+          title: `Device ${deviceId}`,
+          type: 'vehicle',
+          heading: currentGps.heading_deg,
+          speedKmh: currentGps.speed_kmh,
+          details: `GPS Fix: 3D Locked | Sats: ${currentGps.sats} | HDOP: ${currentGps.hdop.toFixed(2)} | Speed: ${currentGps.speed_kmh.toFixed(1)} km/h | Heading: ${Math.round(currentGps.heading_deg)}°`,
+        },
+      ]
+    : [];
+
+  const gpsTrailPositions: [number, number][] = [...telemetry]
+    .reverse()
+    .filter((t) => t.flags.gps_fix && t.gps.lat !== 0 && t.gps.lon !== 0 && !isNaN(t.gps.lat) && !isNaN(t.gps.lon))
+    .map((t) => [t.gps.lat, t.gps.lon]);
+
+  const trailPolylines: MapPolyline[] = gpsTrailPositions.length > 1
+    ? [
+        {
+          id: `trail-${deviceId}`,
+          positions: gpsTrailPositions,
+          color: '#10b981',
+          weight: 3,
+          opacity: 0.85,
+        },
+      ]
+    : [];
+
   return (
     <div className="flex flex-col min-h-screen bg-black text-white font-sans text-xs">
       <Header
@@ -252,38 +311,101 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
           calibrationState={calibState}
         />
 
-        {/* Oscilloscope Waveform Scope */}
-        <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3">
-          <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
-            <div className="flex items-center gap-2">
-              <Activity size={15} className="text-emerald-400" />
-              <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-                50 Hz Accelerometer Waveform Scope (a_long, a_vert)
-              </h2>
+        {/* 2-Column Grid: Waveform Scope & Real-Time Hardware Locator Map */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Oscilloscope Waveform Scope */}
+          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3 flex flex-col justify-between">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Activity size={15} className="text-emerald-400" />
+                <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
+                  50 Hz Accelerometer Waveform Scope (a_long, a_vert)
+                </h2>
+              </div>
+              <span className="text-[10px] font-mono text-zinc-500 bg-black px-2 py-0.5 rounded-sm border border-zinc-800">
+                {telemetry.length} Ingested Frames
+              </span>
             </div>
-            <span className="text-[10px] font-mono text-zinc-500 bg-black px-2 py-0.5 rounded-sm border border-zinc-800">
-              {telemetry.length} Ingested Frames
-            </span>
+
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={waveformChartData}>
+                  <XAxis dataKey="seq" stroke="#52525b" tick={{ fontSize: 10 }} />
+                  <YAxis stroke="#52525b" tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#09090b',
+                      borderColor: '#27272a',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                    }}
+                  />
+                  <Line type="monotone" dataKey="a_long" name="Longitudinal (g)" stroke="#10b981" strokeWidth={1.5} dot={false} />
+                  <Line type="monotone" dataKey="a_vert_rms" name="Vertical RMS (g)" stroke="#3b82f6" strokeWidth={1.5} dot={false} />
+                  <Line type="monotone" dataKey="a_vert_peak" name="Vertical Peak (g)" stroke="#ef4444" strokeWidth={1.5} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
-          <div className="h-44 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={waveformChartData}>
-                <XAxis dataKey="seq" stroke="#52525b" tick={{ fontSize: 10 }} />
-                <YAxis stroke="#52525b" tick={{ fontSize: 10 }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#09090b',
-                    borderColor: '#27272a',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                  }}
-                />
-                <Line type="monotone" dataKey="a_long" name="Longitudinal (g)" stroke="#10b981" strokeWidth={1.5} dot={false} />
-                <Line type="monotone" dataKey="a_vert_rms" name="Vertical RMS (g)" stroke="#3b82f6" strokeWidth={1.5} dot={false} />
-                <Line type="monotone" dataKey="a_vert_peak" name="Vertical Peak (g)" stroke="#ef4444" strokeWidth={1.5} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+          {/* Real-Time Hardware Geographic Location Map with Marker */}
+          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3 flex flex-col justify-between">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <MapPin size={15} className="text-emerald-400" />
+                <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
+                  Hardware Geographic Location (GPS Stream)
+                </h2>
+              </div>
+              <div className="flex items-center gap-2 font-mono text-[10px]">
+                {hasGpsLocation && currentGps ? (
+                  <span className="bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 px-2 py-0.5 rounded-sm flex items-center gap-1.5 font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    3D FIX ({currentGps.sats} SATS)
+                  </span>
+                ) : (
+                  <span className="bg-amber-950/80 text-amber-400 border border-amber-800/60 px-2 py-0.5 rounded-sm flex items-center gap-1.5 font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                    SEARCHING SATELLITES
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="relative h-56 w-full rounded overflow-hidden border border-zinc-800">
+              <OSMMap
+                center={mapCenter}
+                zoom={mapZoom}
+                markers={deviceMarkers}
+                polylines={trailPolylines}
+                className="w-full h-full"
+              />
+
+              {/* Real-Time Coordinate & Telemetry HUD Overlay */}
+              <div className="absolute bottom-2 left-2 right-2 bg-black/85 backdrop-blur border border-zinc-800 rounded px-2.5 py-1.5 flex items-center justify-between text-[10px] font-mono z-[500]">
+                {hasGpsLocation && currentGps ? (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-500">COORDS:</span>
+                      <span className="text-white font-bold">{currentGps.lat.toFixed(6)}, {currentGps.lon.toFixed(6)}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-zinc-400">
+                        SPEED: <strong className="text-emerald-400 font-bold">{currentGps.speed_kmh.toFixed(1)} km/h</strong>
+                      </span>
+                      <span className="text-zinc-400">
+                        HDOP: <strong className="text-zinc-200">{currentGps.hdop.toFixed(2)}</strong>
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-between w-full text-zinc-400">
+                    <span>GPS antenna searching for satellites...</span>
+                    <span className="text-amber-400 font-bold">Awaiting NMEA fix</span>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 

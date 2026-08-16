@@ -15,7 +15,12 @@ import {
   User,
   CheckCircle2,
   XCircle,
+  MapPin,
+  Map as MapIcon,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
+import { OSMMap, MapMarker } from '@/components/map/OSMMap';
 import {
   DeviceRecord,
   VehicleRecord,
@@ -36,6 +41,8 @@ export default function HardwareFleetRegistry() {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
   const [drivers, setDrivers] = useState<DriverRecord[]>([]);
+  const [deviceLocations, setDeviceLocations] = useState<Record<string, { lat: number; lon: number; speed_kmh: number; heading: number; sats: number; last_seen?: string }>>({});
+  const [showMap, setShowMap] = useState(true);
   const [loading, setLoading] = useState(true);
   const [isMounted, setIsMounted] = useState(false);
 
@@ -54,6 +61,30 @@ export default function HardwareFleetRegistry() {
       setDevices(fleet.devices);
       setVehicles(fleet.vehicles);
       setDrivers(fleet.drivers);
+
+      // Fetch latest GPS positions for fleet hardware units
+      const { data: latestTel } = await supabase
+        .from('telemetry')
+        .select('device_id, gps, server_received_at')
+        .order('server_received_at', { ascending: false })
+        .limit(200);
+
+      if (latestTel) {
+        const locs: Record<string, any> = {};
+        for (const row of latestTel) {
+          if (!locs[row.device_id] && row.gps?.lat && row.gps?.lon && Number(row.gps.lat) !== 0) {
+            locs[row.device_id] = {
+              lat: Number(row.gps.lat),
+              lon: Number(row.gps.lon),
+              speed_kmh: Number(row.gps.speed_kmh ?? 0),
+              heading: Number(row.gps.heading ?? 0),
+              sats: Number(row.gps.sats ?? 0),
+              last_seen: row.server_received_at,
+            };
+          }
+        }
+        setDeviceLocations(locs);
+      }
     } catch (err) {
       console.error('Error loading hardware fleet:', err);
     } finally {
@@ -124,6 +155,32 @@ export default function HardwareFleetRegistry() {
   const activeUnitsCount = devices.filter((d) => d.active).length;
   const boundUnitsCount = devices.filter((d) => d.vehicle_id).length;
 
+  const fleetMarkers: MapMarker[] = useMemo(() => {
+    return devices
+      .filter((d) => deviceLocations[d.device_id])
+      .map((d) => {
+        const loc = deviceLocations[d.device_id];
+        return {
+          id: d.device_id,
+          lat: loc.lat,
+          lon: loc.lon,
+          title: `Device ${d.device_id}`,
+          type: 'vehicle' as const,
+          heading: loc.heading,
+          speedKmh: loc.speed_kmh,
+          details: `Device: ${d.device_id} | Vehicle: ${d.vehicle_plate || d.vehicle_id || 'Unassigned'} | Speed: ${loc.speed_kmh.toFixed(1)} km/h | Sats: ${loc.sats}`,
+        };
+      });
+  }, [devices, deviceLocations]);
+
+  const fleetCenter: [number, number] = useMemo(() => {
+    const validPositions = Object.values(deviceLocations);
+    if (validPositions.length > 0) {
+      return [validPositions[0].lat, validPositions[0].lon];
+    }
+    return [6.9271, 79.8612];
+  }, [deviceLocations]);
+
   return (
     <div className="flex flex-col min-h-screen bg-black text-white font-sans text-xs">
       <Header
@@ -179,6 +236,45 @@ export default function HardwareFleetRegistry() {
             <p className="text-xl font-bold font-mono text-white">{activeUnitsCount} Units</p>
             <p className="text-zinc-500 text-[10px]">Eligible for 50Hz ingestion pipeline</p>
           </div>
+        </div>
+
+        {/* Fleet Hardware Geographic Map */}
+        <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3">
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+            <div className="flex items-center gap-2">
+              <MapPin size={15} className="text-emerald-400" />
+              <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
+                Fleet Hardware Geographic Locations
+              </h2>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-mono text-zinc-400">
+                {Object.keys(deviceLocations).length} / {devices.length} Units Located
+              </span>
+              <button
+                onClick={() => setShowMap(!showMap)}
+                className="px-2 py-0.5 rounded-sm bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 flex items-center gap-1 font-mono text-[10px] transition-colors"
+              >
+                {showMap ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                <span>{showMap ? 'Collapse Map' : 'Expand Map'}</span>
+              </button>
+            </div>
+          </div>
+
+          {showMap && (
+            <div className="relative h-64 w-full rounded overflow-hidden border border-zinc-800">
+              <OSMMap
+                center={fleetCenter}
+                zoom={11}
+                markers={fleetMarkers}
+                className="w-full h-full"
+              />
+              <div className="absolute bottom-2 left-2 bg-black/85 backdrop-blur border border-zinc-800 rounded px-2.5 py-1 text-[10px] font-mono text-zinc-400 z-[500] flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Live GPS Positions of In-Field ESP32 Hardware</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Hardware Devices Grid */}

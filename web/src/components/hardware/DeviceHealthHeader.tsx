@@ -17,7 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 
-export type CalibrationState = 'calibrated' | 'uncalibrated' | 'degraded';
+export type CalibrationState = 'calibrated' | 'calibrating' | 'recalibrating' | 'degraded' | 'uncalibrated' | string;
 
 export interface DeviceMetadata {
   device_id: string;
@@ -92,14 +92,29 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
   const wifiQuality = getWifiSignalQuality(wifiRssiDbm);
 
   // Calibration badge styling
-  const getCalibrationBadge = (state: CalibrationState) => {
-    switch (state) {
+  const getCalibrationBadge = (state?: CalibrationState) => {
+    const s = String(state || '').toLowerCase().trim();
+    switch (s) {
       case 'calibrated':
         return {
           label: 'Calibrated',
           icon: CheckCircle2,
           containerClass: 'bg-emerald-950/80 text-emerald-400 border-emerald-800/60',
           dotClass: 'bg-emerald-400',
+        };
+      case 'calibrating':
+        return {
+          label: 'Calibrating...',
+          icon: Activity,
+          containerClass: 'bg-sky-950/80 text-sky-400 border-sky-800/60 animate-pulse',
+          dotClass: 'bg-sky-400',
+        };
+      case 'recalibrating':
+        return {
+          label: 'Recalibrating...',
+          icon: Activity,
+          containerClass: 'bg-amber-950/80 text-amber-400 border-amber-800/60 animate-pulse',
+          dotClass: 'bg-amber-400',
         };
       case 'degraded':
         return {
@@ -114,6 +129,13 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
           icon: XCircle,
           containerClass: 'bg-rose-950/80 text-rose-400 border-rose-800/60',
           dotClass: 'bg-rose-400',
+        };
+      default:
+        return {
+          label: state ? String(state) : 'Uncalibrated',
+          icon: s ? Activity : XCircle,
+          containerClass: 'bg-zinc-900 text-zinc-300 border-zinc-700',
+          dotClass: 'bg-zinc-400',
         };
     }
   };

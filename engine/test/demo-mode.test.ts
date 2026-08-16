@@ -36,8 +36,8 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     },
     impact: {
       ...THRESHOLDS.impact,
-      absoluteFloor: 2.6,
-      baselineMultiplier: 2.5,
+      absoluteFloor: 5.8,
+      baselineMultiplier: 3.5,
     },
   };
 
@@ -109,7 +109,7 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     expect(sink.trips[0].deviceId).toBe('ROADSCORE_001');
   });
 
-  it('triggers a pothole impact candidate on desk tap without GPS fix', async () => {
+  it('triggers a pothole impact candidate on intentional knuckle tap without GPS fix', async () => {
     const sink = createMockSink();
     const log = createSilentLogger();
     const devices = new Map([
@@ -128,7 +128,7 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
 
     const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
 
-    // Tap the desk: vertical peak = 5000 counts = ~2.99 m/s² > 2.6 m/s² threshold
+    // Knuckle tap on desk: vertical peak = 11000 counts = ~6.58 m/s² > 5.8 m/s² threshold
     const row: RawRow = {
       id: 2,
       device_id: 'ROADSCORE_001',
@@ -142,7 +142,7 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
       calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
       accel_raw: { x: 0, y: 0, z: 16384 },
       gyro_raw: { x: 0, y: 0, z: 0 },
-      accel_cal: { vertical_rms: 200, vertical_peak: 5000, horizontal_peak: 100, magnitude_peak: 5000 },
+      accel_cal: { vertical_rms: 400, vertical_peak: 11000, horizontal_peak: 500, magnitude_peak: 11000 },
       gyro_cal: { yaw_rate_peak: 0, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 0 },
       mic: { rms: 500, peak: 1200 },
       gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
@@ -158,6 +158,57 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
       (e) => e.type === 'road.impact_candidate' || e.type === 'driver.avoidable_impact' || e.type === 'road.defect_observation',
     );
     expect(impactEvent).toBeDefined();
+  });
+
+  it('does NOT trigger pothole impact on horizontal table sliding', async () => {
+    const sink = createMockSink();
+    const log = createSilentLogger();
+    const devices = new Map([
+      [
+        'ROADSCORE_001',
+        {
+          deviceId: 'ROADSCORE_001',
+          vehicleId: 'veh-1',
+          driverId: 'drv-1',
+          accelFsG: 2,
+          gyroFsDps: 250,
+          active: true,
+        },
+      ],
+    ]);
+
+    const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
+
+    // Slide across desk: horizontal peak = 6000 counts (~3.59 m/s²), vertical table rumble = 4500 counts (~2.69 m/s²)
+    const row: RawRow = {
+      id: 3,
+      device_id: 'ROADSCORE_001',
+      seq: 3,
+      uptime_ms: 3000,
+      window_ms: 1000,
+      samples: 50,
+      ts: '2026-08-16T10:00:02Z',
+      accel_fs_g: 2,
+      gyro_fs_dps: 250,
+      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
+      accel_raw: { x: 3000, y: 0, z: 16384 },
+      gyro_raw: { x: 0, y: 0, z: 0 },
+      accel_cal: { vertical_rms: 150, vertical_peak: 4500, horizontal_peak: 6000, magnitude_peak: 6000 },
+      gyro_cal: { yaw_rate_peak: 0, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 0 },
+      mic: { rms: 100, peak: 200 },
+      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
+      wifi_rssi: -45,
+      fw_version: '1.0.0-mcu',
+      dropped_posts: 0,
+      created_at: '2026-08-16T10:00:02Z',
+    };
+
+    await pipeline.submit(row);
+
+    const impactEvent = sink.events.find(
+      (e) => e.type === 'road.impact_candidate' || e.type === 'driver.avoidable_impact' || e.type === 'road.defect_observation',
+    );
+    expect(impactEvent).toBeUndefined();
   });
 
   it('triggers harsh cornering on board rotation in demo mode', async () => {

@@ -253,8 +253,8 @@ export const THRESHOLDS: Thresholds = {
 
   impact: {
     baselineAlpha: 0.02,
-    baselineMultiplier: isDemoActive ? 2.5 : 4.0,
-    absoluteFloor: isDemoActive ? 2.6 : 3.9, // 0.27 g in demo mode vs 0.40 g on road
+    baselineMultiplier: isDemoActive ? 3.5 : 4.0,
+    absoluteFloor: isDemoActive ? 5.8 : 3.9, // 0.59 g in demo mode (requires intentional knuckle tap, ignoring desk slides) vs 0.40 g on road
     micMultiplier: 2.5,
     micConfidenceBonus: 0.15,
     clipCounts: 13000,

@@ -106,6 +106,10 @@ export const impactDetector: Detector = {
 
     if (!(s.vertPeak > dynamicThreshold)) return [];
 
+    // In demo mode: ignore horizontal sliding friction that bleeds into the vertical axis.
+    // An intentional pothole demo is a vertical desk tap where vertPeak dominates.
+    if (cfg.demoMode && s.horizPeak > s.vertPeak * 1.5) return [];
+
     // §2.4 clipping check, on RAW COUNTS — the only reason normalize keeps them.
     const censored =
       s.rawVertPeakCounts > cfg.impact.clipCounts || s.rawMagPeakCounts > cfg.impact.clipCounts;

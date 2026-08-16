@@ -106,6 +106,10 @@ export const impactDetector: Detector = {
 
     if (!(s.vertPeak > dynamicThreshold)) return [];
 
+    // An impact is a transient shock impulse, not a static steady-state tilt or inverted gravity offset.
+    // If vertPeak is roughly equal to vertRms, the sensor is simply resting tilted or uncalibrated.
+    if (Number.isFinite(s.vertRms) && s.vertRms > 2.0 && s.vertPeak <= s.vertRms * 1.25) return [];
+
     // In demo mode: ignore horizontal sliding friction that bleeds into the vertical axis.
     // An intentional pothole demo is a vertical desk tap where vertPeak dominates.
     if (cfg.demoMode && s.horizPeak > s.vertPeak * 1.5) return [];

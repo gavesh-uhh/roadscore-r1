@@ -6,7 +6,6 @@ import {
   Wifi,
   ShieldCheck,
   Activity,
-  Gauge,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -15,6 +14,7 @@ import {
   Calendar,
   Layers,
   Zap,
+  Radio,
 } from 'lucide-react';
 
 export type CalibrationState = 'calibrated' | 'calibrating' | 'recalibrating' | 'degraded' | 'uncalibrated' | string;
@@ -39,6 +39,8 @@ export interface DeviceMetadata {
 
 export interface DeviceHealthHeaderProps {
   device: DeviceMetadata;
+  vehicle?: { id: string; plate?: string | null; make?: string | null; model?: string | null; year?: number | null } | null;
+  driver?: { id: string; name: string; licence_ref?: string | null } | null;
   // Optional explicit overrides for telemetry values
   freeHeapKb?: number;
   wifiRssiDbm?: number;
@@ -50,11 +52,14 @@ export interface DeviceHealthHeaderProps {
 }
 
 /**
- * DeviceHealthHeader displays metadata, ESP32 firmware diagnostics,
- * and 3-Axis IMU calibration & gravity lock status for a hardware unit.
+ * Modernized, decluttered DeviceHealthHeader.
+ * Replaces nested border boxes with a sleek, unified telemetry health ribbon
+ * and humanized vehicle/driver identifiers.
  */
 export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
   device,
+  vehicle,
+  driver,
   freeHeapKb = device.free_heap_kb ?? 184,
   wifiRssiDbm = device.wifi_rssi_dbm ?? -62,
   droppedPosts = device.dropped_posts ?? 0,
@@ -63,7 +68,7 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
   mountShiftAngleDeg,
   calibrationState = device.calibration_state ?? 'calibrated',
 }) => {
-  // Compute dynamic mount shift angle if not explicitly provided
+  // Compute dynamic mount shift angle
   const computedMountShift = React.useMemo(() => {
     if (typeof mountShiftAngleDeg === 'number') return mountShiftAngleDeg;
     if (device.mount_shift_angle_deg != null) return device.mount_shift_angle_deg;
@@ -76,17 +81,13 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
     return 0.0;
   }, [mountShiftAngleDeg, device.mount_shift_angle_deg, gravityVector]);
 
-  // Dynamic counts per 1g reference based on full scale
-  const accelFsG = Number(device.accel_fs_g || 2);
-  const countsPer1G = Math.round(32768 / accelFsG);
-
   // WiFi signal indicator helper
   const getWifiSignalQuality = (rssi: number) => {
-    if (rssi <= -95 || rssi === -99) return { label: 'Offline / Weak', color: 'text-zinc-500', bg: 'bg-zinc-600' };
-    if (rssi >= -55) return { label: 'Excellent', color: 'text-emerald-400', bg: 'bg-emerald-500' };
-    if (rssi >= -68) return { label: 'Good', color: 'text-emerald-400', bg: 'bg-emerald-500' };
-    if (rssi >= -78) return { label: 'Fair', color: 'text-amber-400', bg: 'bg-amber-500' };
-    return { label: 'Poor', color: 'text-rose-400', bg: 'bg-rose-500' };
+    if (rssi <= -95 || rssi === -99) return { label: 'Offline', color: 'text-zinc-500', barColor: 'bg-zinc-600', bars: 1 };
+    if (rssi >= -55) return { label: 'Excellent', color: 'text-emerald-400', barColor: 'bg-emerald-400', bars: 4 };
+    if (rssi >= -68) return { label: 'Good', color: 'text-emerald-400', barColor: 'bg-emerald-400', bars: 3 };
+    if (rssi >= -78) return { label: 'Fair', color: 'text-amber-400', barColor: 'bg-amber-400', bars: 2 };
+    return { label: 'Weak', color: 'text-rose-400', barColor: 'bg-rose-400', bars: 1 };
   };
 
   const wifiQuality = getWifiSignalQuality(wifiRssiDbm);
@@ -99,43 +100,49 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
         return {
           label: 'Calibrated',
           icon: CheckCircle2,
-          containerClass: 'bg-emerald-950/80 text-emerald-400 border-emerald-800/60',
-          dotClass: 'bg-emerald-400',
+          color: 'text-emerald-400',
+          bg: 'bg-emerald-950/70 border-emerald-800/60',
+          dot: 'bg-emerald-400',
         };
       case 'calibrating':
         return {
           label: 'Calibrating...',
           icon: Activity,
-          containerClass: 'bg-sky-950/80 text-sky-400 border-sky-800/60 animate-pulse',
-          dotClass: 'bg-sky-400',
+          color: 'text-sky-400',
+          bg: 'bg-sky-950/70 border-sky-800/60 animate-pulse',
+          dot: 'bg-sky-400',
         };
       case 'recalibrating':
         return {
           label: 'Recalibrating...',
           icon: Activity,
-          containerClass: 'bg-amber-950/80 text-amber-400 border-amber-800/60 animate-pulse',
-          dotClass: 'bg-amber-400',
+          color: 'text-amber-400',
+          bg: 'bg-amber-950/70 border-amber-800/60 animate-pulse',
+          dot: 'bg-amber-400',
         };
       case 'degraded':
         return {
           label: 'Degraded',
           icon: AlertTriangle,
-          containerClass: 'bg-amber-950/80 text-amber-400 border-amber-800/60',
-          dotClass: 'bg-amber-400',
+          color: 'text-amber-400',
+          bg: 'bg-amber-950/70 border-amber-800/60',
+          dot: 'bg-amber-400',
         };
       case 'uncalibrated':
         return {
           label: 'Uncalibrated',
           icon: XCircle,
-          containerClass: 'bg-rose-950/80 text-rose-400 border-rose-800/60',
-          dotClass: 'bg-rose-400',
+          color: 'text-rose-400',
+          bg: 'bg-rose-950/70 border-rose-800/60',
+          dot: 'bg-rose-400',
         };
       default:
         return {
           label: state ? String(state) : 'Uncalibrated',
           icon: s ? Activity : XCircle,
-          containerClass: 'bg-zinc-900 text-zinc-300 border-zinc-700',
-          dotClass: 'bg-zinc-400',
+          color: 'text-zinc-300',
+          bg: 'bg-zinc-900 border-zinc-700',
+          dot: 'bg-zinc-400',
         };
     }
   };
@@ -158,265 +165,137 @@ export const DeviceHealthHeader: React.FC<DeviceHealthHeaderProps> = ({
     }
   }, [device.installed_at]);
 
-  return (
-    <div className="w-full space-y-4 font-sans text-xs">
-      {/* Top Banner & Device Identity Card */}
-      <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
-          {/* Device Header Info */}
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-md bg-zinc-900 border border-zinc-800 text-emerald-400">
-              <Cpu size={20} />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base font-bold text-white font-mono tracking-wide">
-                  {device.device_id}
-                </h1>
-                <span
-                  className={`px-2 py-0.5 rounded-sm text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1.5 font-mono ${
-                    device.active
-                      ? 'bg-zinc-900 text-emerald-400 border-zinc-800'
-                      : 'bg-zinc-900 text-zinc-500 border-zinc-800'
-                  }`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-sm ${
-                      device.active ? 'bg-emerald-400' : 'bg-zinc-600'
-                    }`}
-                  />
-                  {device.active ? 'Active' : 'Offline'}
-                </span>
-              </div>
-              <p className="text-[11px] text-zinc-400 mt-0.5 font-sans">
-                ESP32 MCU Telematics Module & Real-Time IMU Streamer
-              </p>
-            </div>
-          </div>
+  // Humanized labels for Vehicle and Driver
+  const vehicleLabel = vehicle
+    ? `${vehicle.make ? `${vehicle.make} ` : ''}${vehicle.model || ''} (${vehicle.plate || 'No Plate'})`.trim()
+    : (device.vehicle_id ? (device.vehicle_id.length > 12 ? `Vehicle #${device.vehicle_id.slice(0, 8)}` : device.vehicle_id) : 'Unassigned');
 
-          {/* Quick Specs / Metadata Pill list */}
-          <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900/80 border border-zinc-800/60 text-zinc-300">
-              <Car size={13} className="text-zinc-500" />
-              <span className="text-zinc-500">Vehicle:</span>
-              <span className="font-mono text-white font-medium">{device.vehicle_id}</span>
+  const driverLabel = driver
+    ? driver.name
+    : (device.driver_id ? (device.driver_id.length > 12 ? `Driver #${device.driver_id.slice(0, 8)}` : device.driver_id) : 'Unassigned');
+
+  return (
+    <div className="w-full space-y-3 font-sans text-xs">
+      {/* Sleek Identity & Configuration Bar (Zero Nested Boxes) */}
+      <div className="bg-zinc-950 border border-zinc-800 rounded-md px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        {/* Left: Device Identity & Architecture Meta */}
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded bg-zinc-900 border border-zinc-800 text-emerald-400 flex-shrink-0">
+            <Cpu size={18} />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-bold text-white font-mono tracking-wide">
+                {device.device_id}
+              </h1>
+              <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold uppercase font-mono flex items-center gap-1.5 border ${
+                device.active
+                  ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800/40'
+                  : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${device.active ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'}`} />
+                {device.active ? 'Active' : 'Offline'}
+              </span>
             </div>
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900/80 border border-zinc-800/60 text-zinc-300">
-              <User size={13} className="text-zinc-500" />
-              <span className="text-zinc-500">Driver:</span>
-              <span className="font-mono text-white font-medium">{device.driver_id}</span>
-            </div>
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900/80 border border-zinc-800/60 text-zinc-300">
-              <Calendar size={13} className="text-zinc-500" />
-              <span className="text-zinc-500">Installed:</span>
-              <span suppressHydrationWarning className="text-white font-medium">{formattedInstallDate}</span>
-            </div>
+            <p className="text-[11px] text-zinc-400 font-mono mt-0.5">
+              ESP32 + MPU6050 &bull; &plusmn;{device.accel_fs_g || 2}g / &plusmn;{device.gyro_fs_dps || 250}&deg;/s &bull; 50 Hz &bull; v{firmwareVersion}
+            </p>
           </div>
         </div>
 
-        {/* Hardware Full Scale Configuration Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-black p-3 rounded-md border border-zinc-800">
-            <span className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider flex items-center gap-1">
-              <Layers size={11} className="text-zinc-400" />
-              Accel Full Scale
-            </span>
-            <p className="text-sm font-bold text-white font-mono mt-1">
-              ±{device.accel_fs_g}g
-            </p>
+        {/* Right: Humanized Vehicle, Driver, and Installation Chips */}
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-900 border border-zinc-800/80 text-zinc-300">
+            <Car size={13} className="text-zinc-500" />
+            <span className="text-zinc-500">Vehicle:</span>
+            <span className="font-semibold text-white">{vehicleLabel}</span>
           </div>
 
-          <div className="bg-black p-3 rounded-md border border-zinc-800">
-            <span className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider flex items-center gap-1">
-              <Zap size={11} className="text-zinc-400" />
-              Gyro Full Scale
-            </span>
-            <p className="text-sm font-bold text-white font-mono mt-1">
-              ±{device.gyro_fs_dps} dps
-            </p>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-900 border border-zinc-800/80 text-zinc-300">
+            <User size={13} className="text-zinc-500" />
+            <span className="text-zinc-500">Driver:</span>
+            <span className="font-semibold text-white">{driverLabel}</span>
           </div>
 
-          <div className="bg-black p-3 rounded-md border border-zinc-800">
-            <span className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider">
-              Sampling Rate
-            </span>
-            <p className="text-sm font-bold text-emerald-400 font-mono mt-1">
-              50 Hz
-            </p>
-          </div>
-
-          <div className="bg-black p-3 rounded-md border border-zinc-800">
-            <span className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider">
-              Hardware Arch
-            </span>
-            <p className="text-sm font-bold text-zinc-300 font-mono mt-1">
-              ESP32 + MPU6050
-            </p>
-          </div>
+          {formattedInstallDate && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-900 border border-zinc-800/80 text-zinc-400">
+              <Calendar size={13} className="text-zinc-500" />
+              <span>{formattedInstallDate}</span>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Grid containing ESP32 Firmware Diagnostics & 3-Axis IMU Calibration */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* ESP32 Firmware Diagnostics Card */}
-        <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3.5">
-          <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
-            <div className="flex items-center gap-2">
-              <Cpu size={15} className="text-emerald-400" />
-              <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-                ESP32 Firmware Diagnostics
-              </h2>
-            </div>
-            <span className="text-[10px] font-mono text-zinc-500 bg-black px-2 py-0.5 rounded-sm border border-zinc-800">
-              MCU Health
-            </span>
+      {/* Unified Real-Time Telematics Ribbon (Single Container, Subtle Column Dividers) */}
+      <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3 grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-0 md:divide-x md:divide-zinc-800/80 text-xs">
+        {/* 1. WiFi Signal */}
+        <div className="md:px-3 flex flex-col justify-between space-y-1">
+          <div className="flex items-center justify-between text-zinc-500 text-[10px] uppercase font-mono tracking-wider">
+            <span>WiFi Signal</span>
+            <Wifi size={12} className={wifiQuality.color} />
           </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            {/* Free Heap Memory */}
-            <div className="bg-black p-3 rounded-md border border-zinc-800 space-y-1">
-              <div className="flex items-center justify-between text-zinc-400">
-                <span className="text-[10px] uppercase font-semibold tracking-wide">
-                  Free Heap
-                </span>
-                <Cpu size={13} className="text-emerald-400" />
-              </div>
-              <p className="text-base font-bold text-white font-mono">{freeHeapKb} KB</p>
-              <p className="text-[10px] text-zinc-500">System SRAM Allocation</p>
-            </div>
-
-            {/* WiFi RSSI Signal Strength */}
-            <div className="bg-black p-3 rounded-md border border-zinc-800 space-y-1">
-              <div className="flex items-center justify-between text-zinc-400">
-                <span className="text-[10px] uppercase font-semibold tracking-wide">
-                  WiFi Signal
-                </span>
-                <Wifi size={13} className={wifiQuality.color} />
-              </div>
-              <div className="flex items-baseline gap-1.5">
-                <p className="text-base font-bold text-white font-mono">{wifiRssiDbm} dBm</p>
-                <span className={`text-[10px] font-semibold ${wifiQuality.color}`}>
-                  ({wifiQuality.label})
-                </span>
-              </div>
-              {/* Signal strength bar */}
-              <div className="w-full bg-zinc-800 rounded-full h-1 mt-1 overflow-hidden">
-                <div
-                  className={`h-full ${wifiQuality.bg}`}
-                  style={{
-                    width: `${Math.min(100, Math.max(10, ((wifiRssiDbm + 100) / 70) * 100))}%`,
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Dropped Posts Counter */}
-            <div className="bg-black p-3 rounded-md border border-zinc-800 space-y-1">
-              <div className="flex items-center justify-between text-zinc-400">
-                <span className="text-[10px] uppercase font-semibold tracking-wide">
-                  Dropped Posts
-                </span>
-                <Activity
-                  size={13}
-                  className={droppedPosts === 0 ? 'text-emerald-400' : 'text-amber-400'}
-                />
-              </div>
-              <p className="text-base font-bold font-mono text-white">{droppedPosts}</p>
-              <p className="text-[10px] text-zinc-500">HTTP/MQTT Telemetry Drops</p>
-            </div>
-
-            {/* Firmware Build Version */}
-            <div className="bg-black p-3 rounded-md border border-zinc-800 space-y-1">
-              <div className="flex items-center justify-between text-zinc-400">
-                <span className="text-[10px] uppercase font-semibold tracking-wide">
-                  Firmware Version
-                </span>
-                <Gauge size={13} className="text-emerald-400" />
-              </div>
-              <p className="text-base font-bold font-mono text-white">{firmwareVersion}</p>
-              <p className="text-[10px] text-zinc-500">MCU Active Runtime Build</p>
-            </div>
+          <div className="flex items-baseline gap-1.5 font-mono">
+            <span className="text-sm font-bold text-white">{wifiRssiDbm} dBm</span>
+            <span className={`text-[10px] font-semibold ${wifiQuality.color}`}>({wifiQuality.label})</span>
           </div>
         </div>
 
-        {/* 3-Axis IMU Calibration & Gravity Lock Card */}
-        <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3.5">
-          <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
-            <div className="flex items-center gap-2">
-              <ShieldCheck size={15} className="text-emerald-400" />
-              <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-                3-Axis IMU Calibration & Gravity Lock
-              </h2>
-            </div>
-            {/* Calibration State Badge */}
-            <span
-              className={`px-2 py-0.5 rounded-sm text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1.5 font-mono ${calBadge.containerClass}`}
-            >
-              <CalIcon size={12} />
+        {/* 2. Free SRAM Heap */}
+        <div className="md:px-3 flex flex-col justify-between space-y-1">
+          <div className="flex items-center justify-between text-zinc-500 text-[10px] uppercase font-mono tracking-wider">
+            <span>Free Heap</span>
+            <Radio size={12} className="text-zinc-500" />
+          </div>
+          <div className="flex items-baseline gap-1.5 font-mono">
+            <span className="text-sm font-bold text-white">{freeHeapKb} KB</span>
+            <span className="text-[10px] text-zinc-500">SRAM</span>
+          </div>
+        </div>
+
+        {/* 3. Ingestion Reliability / Drops */}
+        <div className="md:px-3 flex flex-col justify-between space-y-1">
+          <div className="flex items-center justify-between text-zinc-500 text-[10px] uppercase font-mono tracking-wider">
+            <span>Dropped Packets</span>
+            <Activity size={12} className={droppedPosts === 0 ? 'text-emerald-400' : 'text-amber-400'} />
+          </div>
+          <div className="flex items-baseline gap-1.5 font-mono">
+            <span className={`text-sm font-bold ${droppedPosts === 0 ? 'text-white' : 'text-amber-400'}`}>
+              {droppedPosts}
+            </span>
+            <span className="text-[10px] text-zinc-500">drops</span>
+          </div>
+        </div>
+
+        {/* 4. Gravity Vector Reference */}
+        <div className="md:px-3 flex flex-col justify-between space-y-1">
+          <div className="flex items-center justify-between text-zinc-500 text-[10px] uppercase font-mono tracking-wider">
+            <span>Gravity Vector &bull; [X, Y, Z]</span>
+            <span className="text-[9px] text-zinc-500 font-mono">LSB</span>
+          </div>
+          <div className="font-mono text-xs text-zinc-300 font-bold tracking-tight">
+            [{gravityVector.x}, {gravityVector.y}, <span className="text-emerald-400">{gravityVector.z}</span>]
+          </div>
+        </div>
+
+        {/* 5. Mount Shift & Calibration Lock */}
+        <div className="md:px-3 flex flex-col justify-between space-y-1 col-span-2 md:col-span-1">
+          <div className="flex items-center justify-between text-zinc-500 text-[10px] uppercase font-mono tracking-wider">
+            <span>Mount Alignment</span>
+            <span className={`px-1.5 py-0.2 rounded-sm text-[9px] font-bold border font-mono ${calBadge.bg} ${calBadge.color}`}>
               {calBadge.label}
             </span>
           </div>
-
-          <div className="space-y-3">
-            {/* Gravity Reference Vector */}
-            <div className="bg-black p-3 rounded-md border border-zinc-800 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-semibold tracking-wide text-zinc-400">
-                  Gravity Reference Vector
-                </span>
-                <span className="text-[10px] text-zinc-500 font-mono">
-                  1g = {countsPer1G.toLocaleString()} LSB (±{accelFsG}g)
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-zinc-950 p-2 rounded-md border border-zinc-800">
-                  <span className="text-[10px] text-zinc-500 uppercase font-mono block">X Axis</span>
-                  <span className="text-xs font-bold font-mono text-white">{gravityVector.x}</span>
-                </div>
-                <div className="bg-zinc-950 p-2 rounded-md border border-zinc-800">
-                  <span className="text-[10px] text-zinc-500 uppercase font-mono block">Y Axis</span>
-                  <span className="text-xs font-bold font-mono text-white">{gravityVector.y}</span>
-                </div>
-                <div className="bg-zinc-950 p-2 rounded-md border border-zinc-800">
-                  <span className="text-[10px] text-zinc-500 uppercase font-mono block">Z Axis</span>
-                  <span className="text-xs font-bold font-mono text-emerald-400">
-                    {gravityVector.z}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Mount Shift Angle Displacement */}
-            <div className="bg-black p-3 rounded-md border border-zinc-800 flex items-center justify-between">
-              <div>
-                <span className="text-[10px] uppercase font-semibold tracking-wide text-zinc-400 block">
-                  Mount Shift Angle Displacement
-                </span>
-                <p className="text-[11px] text-zinc-500 mt-0.5">
-                  Angular deviation relative to vehicle pitch/roll axis
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-lg font-bold font-mono text-white">
-                  {computedMountShift}°
-                </p>
-                <span
-                  className={`text-[10px] font-semibold ${
-                    computedMountShift < 1.0
-                      ? 'text-emerald-400'
-                      : computedMountShift < 3.0
-                      ? 'text-amber-400'
-                      : 'text-rose-400'
-                  }`}
-                >
-                  {computedMountShift < 1.0
-                    ? 'Optimal Orientation'
-                    : computedMountShift < 3.0
-                    ? 'Minor Shift'
-                    : 'Recalibration Needed'}
-                </span>
-              </div>
-            </div>
+          <div className="flex items-center justify-between font-mono">
+            <span className="text-sm font-bold text-white">{computedMountShift}&deg;</span>
+            <span className={`text-[10px] font-semibold ${
+              computedMountShift < 1.5
+                ? 'text-emerald-400'
+                : computedMountShift < 3.0
+                ? 'text-amber-400'
+                : 'text-rose-400'
+            }`}>
+              {computedMountShift < 1.5 ? 'Optimal' : computedMountShift < 3.0 ? 'Minor Shift' : 'Shift Warning'}
+            </span>
           </div>
         </div>
       </div>

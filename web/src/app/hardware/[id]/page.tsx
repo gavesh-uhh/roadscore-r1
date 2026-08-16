@@ -31,6 +31,8 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
     installed_at: null,
     active: true,
   });
+  const [vehicle, setVehicle] = useState<any>(null);
+  const [driver, setDriver] = useState<any>(null);
 
   const [telemetry, setTelemetry] = useState<RawTelemetryRow[]>([]);
   const [latestRaw, setLatestRaw] = useState<any | null>(null);
@@ -52,6 +54,26 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
 
         if (devData && isMounted) {
           setDevice(devData);
+
+          // Fetch associated vehicle details if bound
+          if (devData.vehicle_id) {
+            const { data: vehData } = await supabase
+              .from('vehicles')
+              .select('*')
+              .eq('id', devData.vehicle_id)
+              .maybeSingle();
+            if (vehData && isMounted) setVehicle(vehData);
+          }
+
+          // Fetch associated driver details if bound
+          if (devData.driver_id) {
+            const { data: drvData } = await supabase
+              .from('drivers')
+              .select('*')
+              .eq('id', devData.driver_id)
+              .maybeSingle();
+            if (drvData && isMounted) setDriver(drvData);
+          }
         }
 
         // 2. Fetch telemetry stream for this device
@@ -207,6 +229,9 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
     a_vert_peak: row.calibrated_accel.peak_g,
   }));
 
+  // Latest motion frame for header legend
+  const latestMotion = waveformChartData.length > 0 ? waveformChartData[waveformChartData.length - 1] : { a_long: 0, a_vert_rms: 0, a_vert_peak: 0 };
+
   // Parse actual live values from the latest telemetry frame
   const latestCalib = latestRaw?.calibration;
   const gravityRef = Array.isArray(latestCalib?.gravity_ref)
@@ -299,10 +324,12 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
         </div>
       </div>
 
-      <div className="p-5 space-y-4 w-full">
-        {/* Top Pane: ESP32 Health & IMU Calibration Header */}
+      <div className="p-4 md:p-5 space-y-4 w-full max-w-7xl mx-auto">
+        {/* Top Pane: Streamlined Single-Ribbon Health & Identity Header */}
         <DeviceHealthHeader
           device={device}
+          vehicle={vehicle}
+          driver={driver}
           freeHeapKb={freeHeap}
           wifiRssiDbm={liveRssi}
           droppedPosts={liveDropped}
@@ -311,27 +338,45 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
           calibrationState={calibState}
         />
 
-        {/* 2-Column Grid: Waveform Scope & Real-Time Hardware Locator Map */}
+        {/* 2-Column Balanced Workspace: Waveform Scope & Real-Time Hardware Locator Map */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Oscilloscope Waveform Scope */}
-          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3 flex flex-col justify-between">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3.5 space-y-2 flex flex-col justify-between">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
               <div className="flex items-center gap-2">
-                <Activity size={15} className="text-emerald-400" />
+                <Activity size={14} className="text-emerald-400" />
                 <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-                  50 Hz Accelerometer Waveform Scope (a_long, a_vert)
+                  50 Hz Motion Waveform Scope
                 </h2>
               </div>
-              <span className="text-[10px] font-mono text-zinc-500 bg-black px-2 py-0.5 rounded-sm border border-zinc-800">
-                {telemetry.length} Ingested Frames
-              </span>
+              {/* Dynamic Live Values Legend */}
+              <div className="flex items-center gap-3 font-mono text-[10px]">
+                <span className="text-emerald-400 font-medium">
+                  Long: <strong>{latestMotion.a_long.toFixed(3)}g</strong>
+                </span>
+                <span className="text-sky-400 font-medium">
+                  RMS: <strong>{latestMotion.a_vert_rms.toFixed(3)}g</strong>
+                </span>
+                <span className="text-rose-400 font-medium">
+                  Peak: <strong>{latestMotion.a_vert_peak.toFixed(3)}g</strong>
+                </span>
+              </div>
             </div>
 
-            <div className="h-56 w-full">
+            <div className="h-60 w-full pt-1">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={waveformChartData}>
-                  <XAxis dataKey="seq" stroke="#52525b" tick={{ fontSize: 10 }} />
-                  <YAxis stroke="#52525b" tick={{ fontSize: 10 }} />
+                  <XAxis
+                    dataKey="seq"
+                    stroke="#52525b"
+                    tick={{ fontSize: 9, fill: '#71717a' }}
+                    interval={Math.max(1, Math.floor(waveformChartData.length / 5))}
+                  />
+                  <YAxis
+                    stroke="#52525b"
+                    tick={{ fontSize: 9, fill: '#71717a' }}
+                    domain={['auto', 'auto']}
+                  />
                   <Tooltip
                     contentStyle={{
                       backgroundColor: '#09090b',
@@ -340,21 +385,21 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
                       fontSize: '11px',
                     }}
                   />
-                  <Line type="monotone" dataKey="a_long" name="Longitudinal (g)" stroke="#10b981" strokeWidth={1.5} dot={false} />
-                  <Line type="monotone" dataKey="a_vert_rms" name="Vertical RMS (g)" stroke="#3b82f6" strokeWidth={1.5} dot={false} />
-                  <Line type="monotone" dataKey="a_vert_peak" name="Vertical Peak (g)" stroke="#ef4444" strokeWidth={1.5} dot={false} />
+                  <Line type="monotone" dataKey="a_long" name="Longitudinal (g)" stroke="#10b981" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="a_vert_rms" name="Vertical RMS (g)" stroke="#3b82f6" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="a_vert_peak" name="Vertical Peak (g)" stroke="#ef4444" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </div>
 
           {/* Real-Time Hardware Geographic Location Map with Marker */}
-          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3 flex flex-col justify-between">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3.5 space-y-2 flex flex-col justify-between">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
               <div className="flex items-center gap-2">
-                <MapPin size={15} className="text-emerald-400" />
+                <MapPin size={14} className="text-emerald-400" />
                 <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-                  Hardware Geographic Location (GPS Stream)
+                  Hardware Geographic Location
                 </h2>
               </div>
               <div className="flex items-center gap-2 font-mono text-[10px]">
@@ -372,7 +417,7 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
               </div>
             </div>
 
-            <div className="relative h-56 w-full rounded overflow-hidden border border-zinc-800">
+            <div className="relative h-60 w-full rounded overflow-hidden border border-zinc-800/80">
               <OSMMap
                 center={mapCenter}
                 zoom={mapZoom}
@@ -382,7 +427,7 @@ export default function HardwareDeviceInspector({ params }: { params: Promise<{ 
               />
 
               {/* Real-Time Coordinate & Telemetry HUD Overlay */}
-              <div className="absolute bottom-2 left-2 right-2 bg-black/85 backdrop-blur border border-zinc-800 rounded px-2.5 py-1.5 flex items-center justify-between text-[10px] font-mono z-[500]">
+              <div className="absolute bottom-2 left-2 right-2 bg-black/85 backdrop-blur border border-zinc-800/90 rounded px-2.5 py-1.5 flex items-center justify-between text-[10px] font-mono z-[500]">
                 {hasGpsLocation && currentGps ? (
                   <>
                     <div className="flex items-center gap-2">

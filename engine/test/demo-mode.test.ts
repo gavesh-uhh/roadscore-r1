@@ -275,4 +275,130 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     expect(cornerEvent).toBeDefined();
     expect(cornerEvent?.driverId).toBe('drv-1');
   });
+
+  it('triggers harsh acceleration on forward slide in demo mode', async () => {
+    const sink = createMockSink();
+    const log = createSilentLogger();
+    const devices = new Map([
+      [
+        'ROADSCORE_001',
+        {
+          deviceId: 'ROADSCORE_001',
+          vehicleId: 'veh-1',
+          driverId: 'drv-1',
+          accelFsG: 2,
+          gyroFsDps: 250,
+          active: true,
+        },
+      ],
+    ]);
+
+    const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
+
+    // Step 1: Forward slide (horizontal peak = 5000 counts = ~2.99 m/s², raw X positive)
+    const row1: RawRow = {
+      id: 20,
+      device_id: 'ROADSCORE_001',
+      seq: 20,
+      uptime_ms: 20000,
+      window_ms: 1000,
+      samples: 50,
+      ts: '2026-08-16T10:00:20Z',
+      accel_fs_g: 2,
+      gyro_fs_dps: 250,
+      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
+      accel_raw: { x: 4500, y: 0, z: 16384 },
+      gyro_raw: { x: 0, y: 0, z: 0 },
+      accel_cal: { vertical_rms: 20, vertical_peak: 50, horizontal_peak: 5000, magnitude_peak: 5000 },
+      gyro_cal: { yaw_rate_peak: 50, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 50 },
+      mic: { rms: 50, peak: 80 },
+      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
+      wifi_rssi: -45,
+      fw_version: '1.0.0-mcu',
+      dropped_posts: 0,
+      created_at: '2026-08-16T10:00:20Z',
+    };
+
+    // Step 2: Slide ends (motion stops)
+    const row2: RawRow = {
+      ...row1,
+      id: 21,
+      seq: 21,
+      uptime_ms: 21000,
+      ts: '2026-08-16T10:00:21Z',
+      accel_raw: { x: 0, y: 0, z: 16384 },
+      accel_cal: { vertical_rms: 10, vertical_peak: 20, horizontal_peak: 50, magnitude_peak: 50 },
+      created_at: '2026-08-16T10:00:21Z',
+    };
+
+    await pipeline.submit(row1);
+    await pipeline.submit(row2);
+
+    const accelEvent = sink.events.find((e) => e.type === 'driver.harsh_accel');
+    expect(accelEvent).toBeDefined();
+    expect(accelEvent?.driverId).toBe('drv-1');
+  });
+
+  it('triggers harsh braking on backward pull/tilt in demo mode', async () => {
+    const sink = createMockSink();
+    const log = createSilentLogger();
+    const devices = new Map([
+      [
+        'ROADSCORE_001',
+        {
+          deviceId: 'ROADSCORE_001',
+          vehicleId: 'veh-1',
+          driverId: 'drv-1',
+          accelFsG: 2,
+          gyroFsDps: 250,
+          active: true,
+        },
+      ],
+    ]);
+
+    const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
+
+    // Step 1: Backward pull / tilt (horizontal peak = 5000 counts = ~2.99 m/s², raw X negative)
+    const row1: RawRow = {
+      id: 30,
+      device_id: 'ROADSCORE_001',
+      seq: 30,
+      uptime_ms: 30000,
+      window_ms: 1000,
+      samples: 50,
+      ts: '2026-08-16T10:00:30Z',
+      accel_fs_g: 2,
+      gyro_fs_dps: 250,
+      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
+      accel_raw: { x: -4500, y: 0, z: 16384 },
+      gyro_raw: { x: 0, y: 0, z: 0 },
+      accel_cal: { vertical_rms: 20, vertical_peak: 50, horizontal_peak: 5000, magnitude_peak: 5000 },
+      gyro_cal: { yaw_rate_peak: 50, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 50 },
+      mic: { rms: 50, peak: 80 },
+      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
+      wifi_rssi: -45,
+      fw_version: '1.0.0-mcu',
+      dropped_posts: 0,
+      created_at: '2026-08-16T10:00:30Z',
+    };
+
+    // Step 2: Settle
+    const row2: RawRow = {
+      ...row1,
+      id: 31,
+      seq: 31,
+      uptime_ms: 31000,
+      ts: '2026-08-16T10:00:31Z',
+      accel_raw: { x: 0, y: 0, z: 16384 },
+      accel_cal: { vertical_rms: 10, vertical_peak: 20, horizontal_peak: 50, magnitude_peak: 50 },
+      created_at: '2026-08-16T10:00:31Z',
+    };
+
+    await pipeline.submit(row1);
+    await pipeline.submit(row2);
+
+    const brakeEvent = sink.events.find((e) => e.type === 'driver.harsh_brake');
+    expect(brakeEvent).toBeDefined();
+    expect(brakeEvent?.driverId).toBe('drv-1');
+  });
 });

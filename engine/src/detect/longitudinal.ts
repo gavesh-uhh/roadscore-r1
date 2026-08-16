@@ -37,10 +37,10 @@ function gated(ctx: DetectorContext): boolean {
     if (!(s.speed >= ctx.cfg.gps.minSpeedForDynamics)) return false;
   }
 
-  // §6.1: "suppress if yawRate > 0.17 rad/s — that's a corner bleeding in".
-  // A hard corner loads the horizontal axis and perturbs GPS speed; attributing
-  // that to braking would double-count it against the cornering detector.
-  if (Number.isFinite(s.yawRate) && s.yawRate > ctx.cfg.longitudinal.cornerSuppressYaw) {
+  // §6.1: suppress if yawRate is large (that's a corner bleeding in).
+  // In demo mode, relaxed so hand wobble during a desk slide does not block acceleration/braking.
+  const maxYaw = ctx.cfg.demoMode ? 1.5 : ctx.cfg.longitudinal.cornerSuppressYaw;
+  if (Number.isFinite(s.yawRate) && s.yawRate > maxYaw) {
     return false;
   }
   return true;
@@ -59,6 +59,7 @@ function gated(ctx: DetectorContext): boolean {
  * case we fall back to GPS alone rather than gating on a garbage number.
  */
 function corroborated(ctx: DetectorContext, aLong: number): boolean {
+  if (ctx.cfg.demoMode) return true;
   const s = ctx.sample;
   if ((s.flags & Flags.ACCEL_VALID) === 0) return true;
   if (!Number.isFinite(s.horizPeak)) return true;

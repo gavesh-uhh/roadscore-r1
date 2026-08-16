@@ -221,13 +221,13 @@ export const THRESHOLDS: Thresholds = {
   longitudinal: {
     smoothingWindow: 3,
     corroborationSlack: isDemoActive ? 2.5 : 0.5,
-    cornerSuppressYaw: 0.17, // 10 °/s
+    cornerSuppressYaw: isDemoActive ? 1.5 : 0.17, // 85 °/s in demo mode vs 10 °/s on road to tolerate hand wobble
     hysteresisExit: 0.6,
     brake: isDemoActive
-      ? { low: -2.0, medium: -3.5, high: -5.0 }
+      ? { low: -1.6, medium: -2.8, high: -4.2 }
       : { low: -3.0, medium: -4.5, high: -6.0 },
     accel: isDemoActive
-      ? { low: 1.8, medium: 2.8, high: 3.8 }
+      ? { low: 1.6, medium: 2.8, high: 4.0 }
       : { low: 2.5, medium: 3.5, high: 4.5 },
   },
 
@@ -244,11 +244,11 @@ export const THRESHOLDS: Thresholds = {
 
   swerve: {
     windowS: 8,
-    minIntegratedYaw: isDemoActive ? 0.5 : 1.05, // 30° in demo vs 60° on road
+    minIntegratedYaw: isDemoActive ? 2.5 : 1.05, // 143° in demo mode (requires deliberate fast zig-zag) vs 60° on road
     maxNetHeadingChange: isDemoActive ? 999 : 0.35, // 20°
     minSpeed: isDemoActive ? 0 : 8.3, // 30 km/h
-    excursionYaw: isDemoActive ? 0.14 : 0.17,
-    minExcursions: isDemoActive ? 2 : 3,
+    excursionYaw: isDemoActive ? 0.40 : 0.17, // 23 °/s in demo mode
+    minExcursions: 3, // At least 3 rapid oscillations (Left-Right-Left)
   },
 
   impact: {

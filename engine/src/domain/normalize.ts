@@ -788,8 +788,23 @@ export function normalizeRow(
       : typeof row.accel_raw === 'object' && row.accel_raw !== null
         ? (row.accel_raw as any).x
         : NaN;
+  const rawAy =
+    Array.isArray(row.accel_raw)
+      ? row.accel_raw[1]
+      : typeof row.accel_raw === 'object' && row.accel_raw !== null
+        ? (row.accel_raw as any).y
+        : NaN;
 
-  const aLong = computeALong(state, tSec, speed, gpsUsable, cfg, rawAx, horizPeak);
+  const rawHorizDir =
+    Number.isFinite(rawAx) && Number.isFinite(rawAy)
+      ? Math.abs(rawAx) >= Math.abs(rawAy)
+        ? rawAx
+        : rawAy
+      : Number.isFinite(rawAx)
+        ? rawAx
+        : rawAy;
+
+  const aLong = computeALong(state, tSec, speed, gpsUsable, cfg, rawHorizDir, horizPeak);
 
   // --- 6. Flags ------------------------------------------------------------
   //

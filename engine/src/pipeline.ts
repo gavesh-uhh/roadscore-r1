@@ -283,6 +283,15 @@ export class Pipeline {
       this.broadcast({ type: 'event', data: p });
     }
 
+    if (cfg.demoMode && st.trip !== null && finalEvents.length > 0) {
+      const liveScore = scoreTrip(
+        { trip: st.trip, events: st.tripEvents, calibrationStaleEvents: st.calibrationStaleCount },
+        cfg,
+        RULE_VERSION,
+      );
+      sink.enqueueScore(liveScore);
+    }
+
     // --- predict (§7.4) ----------------------------------------------------
     const preds = predictAhead({ sample, state: st, map: this.map, defects: this.defects, cfg });
     for (const p of preds) {

@@ -32,8 +32,10 @@ type Direction = 'brake' | 'accel';
 function gated(ctx: DetectorContext): boolean {
   const s = ctx.sample;
   if (!Number.isFinite(s.aLong)) return false;
-  if ((s.flags & Flags.GPS_USABLE) === 0) return false;
-  if (!(s.speed >= ctx.cfg.gps.minSpeedForDynamics)) return false;
+  if (!ctx.cfg.demoMode) {
+    if ((s.flags & Flags.GPS_USABLE) === 0) return false;
+    if (!(s.speed >= ctx.cfg.gps.minSpeedForDynamics)) return false;
+  }
 
   // §6.1: "suppress if yawRate > 0.17 rad/s — that's a corner bleeding in".
   // A hard corner loads the horizontal axis and perturbs GPS speed; attributing

@@ -139,6 +139,8 @@ export const envSchema = z.object({
   // rather than masked by the backfill quietly repairing it.
   ENABLE_REALTIME: boolVar().default('true'),
   ENABLE_SWEEPER: boolVar().default('true'),
+  /** Classroom / Lab demo mode: bypasses GPS speed checks for hand gesture testing. */
+  DEMO_MODE: boolVar().default('false'),
 
   // --- State (§9, runaway state) -------------------------------------------
   //

@@ -82,9 +82,9 @@ export const lateralDetector: Detector = {
     const t = ctx.cfg.lateral;
 
     const yaw = s.yawRate;
-    const speed = s.speed;
+    const speed = ctx.cfg.demoMode && (!Number.isFinite(s.speed) || s.speed === 0) ? 11.11 : s.speed;
     const gyroValid = (s.flags & Flags.GYRO_VALID) !== 0;
-    const gpsUsable = (s.flags & Flags.GPS_USABLE) !== 0;
+    const gpsUsable = ctx.cfg.demoMode || (s.flags & Flags.GPS_USABLE) !== 0;
 
     const cornering =
       gyroValid &&
@@ -99,10 +99,10 @@ export const lateralDetector: Detector = {
 
     // Independent GPS cross-check. Only *disqualifies* when both witnesses are
     // available and disagree; an absent GPS yaw is not evidence against.
-    const wGps = gpsYawRate(ctx);
+    const wGps = ctx.cfg.demoMode ? NaN : gpsYawRate(ctx);
     const crossChecked = Number.isFinite(wGps);
     const agrees = !crossChecked || Math.abs(yaw - wGps) <= t.gpsYawTolerance;
-    const consistent = lateralConsistent(ctx, Number.isFinite(aLat) ? aLat : 0);
+    const consistent = ctx.cfg.demoMode ? true : lateralConsistent(ctx, Number.isFinite(aLat) ? aLat : 0);
 
     const valid = cornering && agrees && consistent;
 

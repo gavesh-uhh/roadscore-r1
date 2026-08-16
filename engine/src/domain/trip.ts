@@ -76,7 +76,9 @@ function closeTrip(
   trip.gpsCoverage = trip.totalRows > 0 ? trip.gpsFixRows / trip.totalRows : null;
 
   const tooShort =
-    trip.distanceM < cfg.trip.minDistanceM && (trip.durationS ?? 0) < cfg.trip.minDurationS;
+    !cfg.demoMode &&
+    trip.distanceM < cfg.trip.minDistanceM &&
+    (trip.durationS ?? 0) < cfg.trip.minDurationS;
   trip.status = tooShort ? 'abandoned' : 'closed';
   return trip;
 }
@@ -143,6 +145,15 @@ export function updateTrip(
   } else {
     st.movingSinceTSec = null;
     if (stationary && st.stationarySinceTSec === null) st.stationarySinceTSec = s.tSec;
+
+    // In demo mode without sustained GPS driving: auto-open a persistent Virtual Demo Trip on first telemetry
+    if (cfg.demoMode && st.trip === null) {
+      const trip = openTrip(st, s, s.tSec);
+      trip.distanceM = 1500; // 1.5 km simulated exposure so score calculation produces meaningful live deductions
+      trip.gpsCoverage = 1.0;
+      st.trip = trip;
+      out.opened = trip;
+    }
   }
 
   // -------------------------------------------------------------------------

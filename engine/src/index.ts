@@ -253,10 +253,13 @@ async function runDailyRollup(db: Db, sink: PgSink, cfg: typeof THRESHOLDS, log:
 async function main(): Promise<void> {
   const env: Env = loadEnv();
   const log = createLogger(env, { service: 'roadscore-engine' });
-  const cfg = THRESHOLDS;
+  const cfg = {
+    ...THRESHOLDS,
+    ...(env.DEMO_MODE ? { demoMode: true } : {}),
+  };
 
   log.info(
-    { nodeEnv: env.NODE_ENV, ruleVersion: cfg.version, realtime: env.ENABLE_REALTIME, sweeper: env.ENABLE_SWEEPER },
+    { nodeEnv: env.NODE_ENV, ruleVersion: cfg.version, demoMode: cfg.demoMode, realtime: env.ENABLE_REALTIME, sweeper: env.ENABLE_SWEEPER },
     'starting',
   );
 

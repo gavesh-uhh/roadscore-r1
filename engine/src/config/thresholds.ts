@@ -13,6 +13,8 @@ export const RULE_VERSION = '2026.08.09-r1';
 
 export interface Thresholds {
   version: string;
+  /** Classroom/lab demo mode: bypasses GPS speed gating and satellite fix requirements for indoor testing. */
+  demoMode?: boolean;
 
   /** Gating shared by every GPS-derived detector (§6.1). */
   gps: {
@@ -202,48 +204,57 @@ export interface Thresholds {
   };
 }
 
+const isDemoActive = typeof process !== 'undefined' && process.env?.DEMO_MODE === 'true';
+
 export const THRESHOLDS: Thresholds = {
   version: RULE_VERSION,
+  demoMode: isDemoActive,
 
   gps: {
-    minSats: 5,
-    maxHdop: 2.5,
-    minSpeedForDynamics: 2.8, // 10 km/h
+    minSats: isDemoActive ? 0 : 5,
+    maxHdop: isDemoActive ? 999 : 2.5,
+    minSpeedForDynamics: isDemoActive ? 0 : 2.8, // 10 km/h (bypassed in demo mode)
     degradedHdop: 5,
     degradedSustainedS: 30,
   },
 
   longitudinal: {
     smoothingWindow: 3,
-    corroborationSlack: 0.5,
+    corroborationSlack: isDemoActive ? 2.5 : 0.5,
     cornerSuppressYaw: 0.17, // 10 °/s
     hysteresisExit: 0.6,
-    brake: { low: -3.0, medium: -4.5, high: -6.0 },
-    accel: { low: 2.5, medium: 3.5, high: 4.5 },
+    brake: isDemoActive
+      ? { low: -2.0, medium: -3.5, high: -5.0 }
+      : { low: -3.0, medium: -4.5, high: -6.0 },
+    accel: isDemoActive
+      ? { low: 1.8, medium: 2.8, high: 3.8 }
+      : { low: 2.5, medium: 3.5, high: 4.5 },
   },
 
   lateral: {
-    cornerYaw: 0.26, // 15 °/s
-    cornerSpeed: 5.5,
-    excessive: { low: 3.4, medium: 4.9, high: 5.9 },
-    gpsYawTolerance: 0.35,
+    cornerYaw: isDemoActive ? 0.20 : 0.26, // 11.5 °/s in demo mode vs 15 °/s on road
+    cornerSpeed: isDemoActive ? 0 : 5.5,
+    excessive: isDemoActive
+      ? { low: 2.0, medium: 3.5, high: 4.8 }
+      : { low: 3.4, medium: 4.9, high: 5.9 },
+    gpsYawTolerance: isDemoActive ? 999 : 0.35,
     consistencyLowSlack: 0.5,
     consistencyHighSlack: 0.8,
   },
 
   swerve: {
     windowS: 8,
-    minIntegratedYaw: 1.05, // 60°
-    maxNetHeadingChange: 0.35, // 20°
-    minSpeed: 8.3, // 30 km/h
-    excursionYaw: 0.17,
-    minExcursions: 3,
+    minIntegratedYaw: isDemoActive ? 0.5 : 1.05, // 30° in demo vs 60° on road
+    maxNetHeadingChange: isDemoActive ? 999 : 0.35, // 20°
+    minSpeed: isDemoActive ? 0 : 8.3, // 30 km/h
+    excursionYaw: isDemoActive ? 0.14 : 0.17,
+    minExcursions: isDemoActive ? 2 : 3,
   },
 
   impact: {
     baselineAlpha: 0.02,
-    baselineMultiplier: 4.0,
-    absoluteFloor: 3.9, // 0.40 g
+    baselineMultiplier: isDemoActive ? 2.5 : 4.0,
+    absoluteFloor: isDemoActive ? 2.6 : 3.9, // 0.27 g in demo mode vs 0.40 g on road
     micMultiplier: 2.5,
     micConfidenceBonus: 0.15,
     clipCounts: 13000,

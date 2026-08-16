@@ -51,10 +51,10 @@ export function measureSwerveWindow(ctx: DetectorContext): SwerveWindow | null {
   let minSpeed = Infinity;
 
   for (const i of idx) {
-    if (!r.hasFlagAt(i, Flags.GYRO_VALID) || !r.hasFlagAt(i, Flags.GPS_USABLE)) return null;
+    if (!r.hasFlagAt(i, Flags.GYRO_VALID) || (!ctx.cfg.demoMode && !r.hasFlagAt(i, Flags.GPS_USABLE))) return null;
 
     const w = r.yawRateAt(i);
-    const speed = r.speedAt(i);
+    const speed = ctx.cfg.demoMode ? 11.11 : r.speedAt(i);
     if (!Number.isFinite(w) || !Number.isFinite(speed)) return null;
     minSpeed = Math.min(minSpeed, speed);
 
@@ -80,14 +80,17 @@ export function measureSwerveWindow(ctx: DetectorContext): SwerveWindow | null {
 
   const hNew = r.headingAt(newest);
   const hOld = r.headingAt(oldest);
-  if (!Number.isFinite(hNew) || !Number.isFinite(hOld)) return null;
+  if (!ctx.cfg.demoMode && (!Number.isFinite(hNew) || !Number.isFinite(hOld))) return null;
 
   const spanS = r.tSecAt(newest) - r.tSecAt(oldest);
   if (!(spanS > 0)) return null;
 
   return {
     integratedYaw,
-    netHeadingChange: Math.abs(headingDelta(hNew, hOld)) * DEG2RAD,
+    netHeadingChange:
+      Number.isFinite(hNew) && Number.isFinite(hOld)
+        ? Math.abs(headingDelta(hNew, hOld)) * DEG2RAD
+        : 0,
     excursions,
     minSpeed,
     indices: idx,

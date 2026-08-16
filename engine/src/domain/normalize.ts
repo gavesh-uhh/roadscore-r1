@@ -542,7 +542,20 @@ function computeALong(
   speed: number,
   gpsUsable: boolean,
   cfg: Thresholds,
+  rawAxCounts?: number,
+  horizPeak?: number,
 ): number {
+  if (cfg.demoMode && (!gpsUsable || !Number.isFinite(speed) || speed === 0)) {
+    // In indoor demo mode on a desk: derive signed aLong from calibrated horizontal peak & raw X sign
+    if (Number.isFinite(horizPeak) && (horizPeak ?? 0) > 0) {
+      const sign =
+        typeof rawAxCounts === 'number' && Number.isFinite(rawAxCounts) && rawAxCounts < 0
+          ? -1
+          : 1;
+      return sign * (horizPeak ?? 0);
+    }
+  }
+
   if (!gpsUsable || !Number.isFinite(speed) || !Number.isFinite(tSec)) return NaN;
 
   const window = Math.max(2, Math.trunc(cfg.longitudinal.smoothingWindow));
@@ -597,7 +610,7 @@ export function plausibilityReason(raw: ParsedRawRow, cfg: Thresholds): string |
 
   const lat = raw.gps?.lat;
   const lon = raw.gps?.lon;
-  if (typeof lat === 'number' && typeof lon === 'number') {
+  if (!cfg.demoMode && raw.gps?.fix === true && typeof lat === 'number' && typeof lon === 'number') {
     // (0,0) is Null Island — the canonical "uninitialised GPS struct" value, and
     // it is outside the operating box anyway, so it is rejected by the bounds
     // check rather than needing a special case.
@@ -769,7 +782,14 @@ export function normalizeRow(
   const calibrationAgeMs = typeof calibration?.age_ms === 'number' ? calibration.age_ms : NaN;
   const gravityRef = toVec3(calibration?.gravity_ref);
 
-  const aLong = computeALong(state, tSec, speed, gpsUsable, cfg);
+  const rawAx =
+    Array.isArray(row.accel_raw)
+      ? row.accel_raw[0]
+      : typeof row.accel_raw === 'object' && row.accel_raw !== null
+        ? (row.accel_raw as any).x
+        : NaN;
+
+  const aLong = computeALong(state, tSec, speed, gpsUsable, cfg, rawAx, horizPeak);
 
   // --- 6. Flags ------------------------------------------------------------
   //
@@ -790,8 +810,8 @@ export function normalizeRow(
 
   let flags = 0;
   if (calibrated) flags |= Flags.CALIBRATED;
-  if (hasFix) flags |= Flags.GPS_FIX;
-  if (gpsUsable) flags |= Flags.GPS_USABLE;
+  if (hasFix || cfg.demoMode) flags |= Flags.GPS_FIX;
+  if (gpsUsable || cfg.demoMode) flags |= Flags.GPS_USABLE;
 
   // §2.4: at ±2 g with ~1 g permanently consumed by gravity there is only ~1 g
   // of headroom, and real potholes exceed it. Checked on the RAW counts because
@@ -803,7 +823,9 @@ export function normalizeRow(
     (Number.isFinite(rawMagPeakCounts) && Math.abs(rawMagPeakCounts) > cfg.impact.clipCounts);
   if (clipped) flags |= Flags.CLIPPED;
 
-  if (hasFix && speed > cfg.duty.idleSpeed) flags |= Flags.MOVING;
+  if ((hasFix && speed > cfg.duty.idleSpeed) || (cfg.demoMode && Number.isFinite(horizPeak) && horizPeak > 0)) {
+    flags |= Flags.MOVING;
+  }
 
   // The mic is a raw 12-bit ADC (§2.1): 0..4095, unitless, relative only. A
   // value outside that range is not a loud noise, it is a broken read.

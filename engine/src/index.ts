@@ -264,6 +264,14 @@ async function main(): Promise<void> {
   );
 
   const db = createDb(env);
+
+  // Auto-heal schema if migration 003 hasn't run on the remote instance
+  try {
+    await db`ALTER TABLE public.driving_events ADD COLUMN IF NOT EXISTS driver_id UUID REFERENCES public.drivers(id) ON DELETE SET NULL`;
+  } catch {
+    // non-fatal if table not yet initialized or column already exists
+  }
+
   const sink = new PgSink(db, log, {
     flushMs: env.WRITER_FLUSH_MS,
     maxRows: env.WRITER_MAX_ROWS,

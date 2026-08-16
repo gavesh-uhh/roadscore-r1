@@ -35,6 +35,8 @@ const COLORS = {
   gray: '\x1b[90m',
 };
 
+import readline from 'node:readline';
+
 const args = process.argv.slice(2);
 const withSim = args.includes('--sim');
 const withSimWorst = args.includes('--sim-worst') || args.includes('--worst');
@@ -67,12 +69,12 @@ function prefixStream(stream, prefix, color) {
   });
 }
 
-function startProcess(name, command, args, cwd, color) {
+function startProcess(name, command, args, cwd, color, extraEnv = {}) {
   const child = spawn(command, args, {
     cwd,
     stdio: ['inherit', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
-    env: { ...process.env, FORCE_COLOR: '1' },
+    env: { ...process.env, ...extraEnv, FORCE_COLOR: '1' },
   });
 
   children.push({ name, child });
@@ -90,33 +92,71 @@ function startProcess(name, command, args, cwd, color) {
   return child;
 }
 
-// 1. Start Web App (Next.js)
-console.log(`${COLORS.green}▶ Starting Web App on http://localhost:3000 ...${COLORS.reset}`);
-startProcess('WEB', 'npm', ['run', 'dev'], WEB_DIR, COLORS.cyan);
+async function resolveDemoMode() {
+  if (args.includes('--demo')) return true;
+  if (args.includes('--no-demo')) return false;
+  if (process.env.DEMO_MODE === 'true') return true;
 
-// 2. Start Telematics Engine
-console.log(`${COLORS.green}▶ Starting Engine Ingestion on http://localhost:3001 ...${COLORS.reset}`);
-startProcess('ENGINE', 'npm', ['run', 'dev'], ENGINE_DIR, COLORS.green);
+  if (!process.stdin.isTTY) {
+    return false;
+  }
 
-// 3. Optional: Start Simulator
-if (withSimWorst) {
-  console.log(`${COLORS.magenta}▶ Starting Live Simulator [Worst Driver Preset] ...${COLORS.reset}`);
-  setTimeout(() => {
-    startProcess('SIM-WORST', 'npm', ['run', 'sim:live:worst'], ENGINE_DIR, COLORS.magenta);
-  }, 2000);
-} else if (withSimPenalties) {
-  console.log(`${COLORS.magenta}▶ Starting Live Simulator [Driver Penalties Preset] ...${COLORS.reset}`);
-  setTimeout(() => {
-    startProcess('SIM-PEN', 'npm', ['run', 'sim:live:penalties'], ENGINE_DIR, COLORS.magenta);
-  }, 2000);
-} else if (withSim) {
-  console.log(`${COLORS.magenta}▶ Starting Live Simulator [Mixed Fleet Preset] ...${COLORS.reset}`);
-  setTimeout(() => {
-    startProcess('SIM-LIVE', 'npm', ['run', 'sim:live'], ENGINE_DIR, COLORS.magenta);
-  }, 2000);
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(
+      `\n${COLORS.bold}${COLORS.cyan}? Enable DEMO_MODE for indoor hand-gesture & classroom testing? (y/N): ${COLORS.reset}`,
+      (answer) => {
+        rl.close();
+        const val = answer.trim().toLowerCase();
+        resolve(val === 'y' || val === 'yes');
+      },
+    );
+  });
 }
 
-console.log(`\n${COLORS.gray}Press Ctrl+C to stop all services simultaneously.${COLORS.reset}\n`);
+async function main() {
+  const isDemo = await resolveDemoMode();
+
+  if (isDemo) {
+    console.log(`\n${COLORS.bold}${COLORS.yellow}⚡ DEMO MODE ACTIVE${COLORS.reset} ${COLORS.dim}— GPS speed gating bypassed • Natural hand gestures enabled • Virtual Trip active${COLORS.reset}\n`);
+  } else {
+    console.log(`\n${COLORS.bold}${COLORS.gray}⚡ STANDARD ROAD MODE ACTIVE${COLORS.reset} ${COLORS.dim}— Strict GPS speed gating & on-road validation enabled${COLORS.reset}\n`);
+  }
+
+  // 1. Start Web App (Next.js)
+  console.log(`${COLORS.green}▶ Starting Web App on http://localhost:3000 ...${COLORS.reset}`);
+  startProcess('WEB', 'npm', ['run', 'dev'], WEB_DIR, COLORS.cyan);
+
+  // 2. Start Telematics Engine with DEMO_MODE flag
+  console.log(`${COLORS.green}▶ Starting Engine Ingestion on http://localhost:3001 (DEMO_MODE=${isDemo}) ...${COLORS.reset}`);
+  startProcess('ENGINE', 'npm', ['run', 'dev'], ENGINE_DIR, COLORS.green, {
+    DEMO_MODE: isDemo ? 'true' : 'false',
+  });
+
+  // 3. Optional: Start Simulator
+  if (withSimWorst) {
+    console.log(`${COLORS.magenta}▶ Starting Live Simulator [Worst Driver Preset] ...${COLORS.reset}`);
+    setTimeout(() => {
+      startProcess('SIM-WORST', 'npm', ['run', 'sim:live:worst'], ENGINE_DIR, COLORS.magenta);
+    }, 2000);
+  } else if (withSimPenalties) {
+    console.log(`${COLORS.magenta}▶ Starting Live Simulator [Driver Penalties Preset] ...${COLORS.reset}`);
+    setTimeout(() => {
+      startProcess('SIM-PEN', 'npm', ['run', 'sim:live:penalties'], ENGINE_DIR, COLORS.magenta);
+    }, 2000);
+  } else if (withSim) {
+    console.log(`${COLORS.magenta}▶ Starting Live Simulator [Mixed Fleet Preset] ...${COLORS.reset}`);
+    setTimeout(() => {
+      startProcess('SIM-LIVE', 'npm', ['run', 'sim:live'], ENGINE_DIR, COLORS.magenta);
+    }, 2000);
+  }
+
+  console.log(`\n${COLORS.gray}Press Ctrl+C to stop all services simultaneously.${COLORS.reset}\n`);
+}
 
 // Graceful cleanup handler
 function shutdown() {
@@ -139,3 +179,8 @@ function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -90,9 +90,25 @@ export class TelemetryGenerator {
     // 3. Lateral centripetal acceleration: a_lat = v * yawRate
     let aLat = speedMps * yawRateRadps;
 
+    // Normal driving comfort bounds (when no explicit event is active)
+    if (!activeEvent) {
+      if (speedProfile === 'normal' || speedProfile === 'cautious') {
+        aLat = Math.min(1.8, aLat);
+        yawRateRadps = Math.min(0.09, yawRateRadps); // < 5.2 deg/sec
+        aLong = Math.max(-1.5, Math.min(1.5, aLong));
+      } else if (speedProfile === 'erratic') {
+        aLat = Math.min(2.8, aLat);
+        yawRateRadps = Math.min(0.18, yawRateRadps);
+        aLong = Math.max(-2.4, Math.min(2.4, aLong));
+      }
+    }
+
     // 4. Baseline road vibration / noise (depends on speed and profile)
-    let baselineVibration = 0.6 + (speedKmh / 100) * 0.4 + (Math.random() - 0.5) * 0.2;
-    let horizontalPeak = Math.max(0.2, Math.sqrt(aLong * aLong + aLat * aLat) + (Math.random() - 0.5) * 0.15);
+    let baselineVibration = 0.4 + (speedKmh / 100) * 0.3 + (Math.random() - 0.5) * 0.15;
+    let horizontalPeak = Math.max(0.15, Math.sqrt(aLong * aLong + aLat * aLat) + (Math.random() - 0.5) * 0.1);
+    if (!activeEvent && (speedProfile === 'normal' || speedProfile === 'cautious')) {
+      horizontalPeak = Math.min(2.0, horizontalPeak);
+    }
     let verticalAccel = baselineVibration;
     let micRms = 110 + speedKmh * 3.5 + Math.random() * 30;
     let micPeak = micRms * (1.8 + Math.random() * 0.4);

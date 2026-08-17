@@ -202,8 +202,8 @@ export class SimulatedDriver {
       }
     }
 
-    // 4. Interpolate exact Lat/Lon and Heading from route points
-    this.updatePositionAndHeading();
+    // 4. Interpolate exact Lat/Lon and smoothly advance heading
+    this.updatePositionAndHeading(effectiveDt);
 
     // 5. Generate Physical Telemetry & Format Row
     const telemetry = this.generator.generatePhysics(
@@ -225,7 +225,7 @@ export class SimulatedDriver {
     return row;
   }
 
-  private updatePositionAndHeading(): void {
+  private updatePositionAndHeading(effectiveDt = 1.0): void {
     const points = this.route.points;
     if (!points || points.length === 0) return;
 
@@ -233,6 +233,7 @@ export class SimulatedDriver {
       const p = points[0]!;
       this.currentPosition = { lat: p.lat, lon: p.lon };
       this.currentHeading = p.segmentHeadingDeg;
+      this.previousHeading = this.currentHeading;
       return;
     }
 
@@ -240,6 +241,7 @@ export class SimulatedDriver {
       const p = points[points.length - 1]!;
       this.currentPosition = { lat: p.lat, lon: p.lon };
       this.currentHeading = p.segmentHeadingDeg;
+      this.previousHeading = this.currentHeading;
       return;
     }
 
@@ -261,12 +263,34 @@ export class SimulatedDriver {
       t = Math.max(0, Math.min(1, t));
     }
 
-    this.previousHeading = this.currentHeading;
     this.currentPosition = {
       lat: pA.lat + (pB.lat - pA.lat) * t,
       lon: pA.lon + (pB.lon - pA.lon) * t,
     };
-    this.currentHeading = pA.segmentHeadingDeg;
+
+    // Smooth heading changes over time to emulate automotive steering dynamics
+    const targetHeading = pA.segmentHeadingDeg;
+    let diff = targetHeading - this.currentHeading;
+    while (diff > 180) diff -= 360;
+    while (diff < -180) diff += 360;
+
+    const isHarshTurn =
+      this.activeEvent?.type === 'sharp_turn' ||
+      this.activeEvent?.type === 'swerve' ||
+      this.speedProfile === 'aggressive' ||
+      this.speedProfile === 'worst';
+    const maxTurnRateDegPerSec = isHarshTurn ? 35.0 : 6.0;
+    const maxStep = maxTurnRateDegPerSec * effectiveDt;
+
+    let newHeading = this.currentHeading;
+    if (Math.abs(diff) <= maxStep) {
+      newHeading = targetHeading;
+    } else {
+      newHeading = (this.currentHeading + Math.sign(diff) * maxStep + 360) % 360;
+    }
+
+    this.previousHeading = this.currentHeading;
+    this.currentHeading = Number(newHeading.toFixed(1));
   }
 
   public getState(): DriverState {

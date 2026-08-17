@@ -239,9 +239,6 @@ export function evaluateRoute(
   );
 
   let defectHits = 0;
-  let totalRoughness = 0;
-  let matchedCells = 0;
-  let spikeHits = 0;
 
   // 1. Defect proximity check along route polyline (within 25 meters)
   const hitDefectIds = new Set<string>();
@@ -256,6 +253,10 @@ export function evaluateRoute(
   defectHits = hitDefectIds.size;
 
   // 2. Traversed H3-12 cells evaluation
+  // Track matched route cells and unique observation records to avoid duplicate accumulation
+  const matchedRouteCells = new Set<string>();
+  const matchedObservationRecords = new Map<string, RoadCellRecord>();
+
   traversedH3Cells.forEach((h3Index) => {
     let matched = cellMap.get(h3Index);
 
@@ -276,21 +277,22 @@ export function evaluateRoute(
     }
 
     if (matched && matched.roughness_index !== undefined && matched.roughness_index !== null) {
-      totalRoughness += Number(matched.roughness_index);
-      matchedCells++;
-      if ((matched.spike_count ?? 0) > 0 || (matched.defect_confidence ?? 0) >= 0.6) {
-        spikeHits++;
+      matchedRouteCells.add(h3Index);
+      const recordKey = matched.h3_12 || h3Index;
+      if (!matchedObservationRecords.has(recordKey)) {
+        matchedObservationRecords.set(recordKey, matched);
       }
     }
   });
 
   // Calculate actual coverage based on unique route H3 cells
+  const matchedCellsCount = matchedObservationRecords.size;
   const coveragePct = Math.min(
     100,
-    Math.round((matchedCells / Math.max(1, totalRouteCellsCount)) * 100)
+    Math.round((matchedRouteCells.size / Math.max(1, totalRouteCellsCount)) * 100)
   );
 
-  const hasSufficientData = matchedCells >= 3 && coveragePct >= 10;
+  const hasSufficientData = matchedCellsCount >= 3 && (coveragePct >= 10 || matchedCellsCount >= 5);
 
   // If insufficient data: do not fabricate roughness or smoothness
   if (!hasSufficientData) {
@@ -298,7 +300,7 @@ export function evaluateRoute(
       potholesHit: defectHits > 0 ? defectHits : null,
       smoothnessScore: null,
       avgRoughness: null,
-      matchedCellsCount: matchedCells,
+      matchedCellsCount,
       totalRouteCellsCount,
       coveragePct,
       coverageStatus: coveragePct > 0 ? 'sparse' : 'unmapped',
@@ -307,7 +309,18 @@ export function evaluateRoute(
   }
 
   // Compute metrics strictly from observed telemetry
-  const avgRoughness = Number((totalRoughness / matchedCells).toFixed(1));
+  let totalRoughness = 0;
+  let spikeHits = 0;
+  matchedObservationRecords.forEach((rec) => {
+    totalRoughness += Number(rec.roughness_index || 0);
+    if ((rec.spike_count ?? 0) > 0 || (rec.defect_confidence ?? 0) >= 0.6) {
+      spikeHits++;
+    }
+  });
+
+  const avgRoughness = Number(
+    (totalRoughness / Math.max(1, matchedObservationRecords.size)).toFixed(1)
+  );
   const totalDefects = defectHits + spikeHits;
 
   // Smoothness score strictly derived from observed roughness and verified defects
@@ -323,7 +336,7 @@ export function evaluateRoute(
     potholesHit: totalDefects,
     smoothnessScore,
     avgRoughness,
-    matchedCellsCount: matchedCells,
+    matchedCellsCount,
     totalRouteCellsCount,
     coveragePct,
     coverageStatus,

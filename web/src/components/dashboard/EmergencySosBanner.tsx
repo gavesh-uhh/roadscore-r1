@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ExternalLink,
@@ -11,7 +10,6 @@ import {
 import type { EmergencyDispatchRecord } from '@/app/api/emergency/dispatch/route';
 
 export function EmergencySosBanner() {
-  const pathname = usePathname();
   const [emergencies, setEmergencies] = useState<EmergencyDispatchRecord[]>([]);
 
   const fetchEmergencies = useCallback(async () => {
@@ -37,12 +35,11 @@ export function EmergencySosBanner() {
 
   useEffect(() => {
     fetchEmergencies();
-    const interval = setInterval(fetchEmergencies, 3000);
+    const interval = setInterval(fetchEmergencies, 2500);
     return () => clearInterval(interval);
   }, [fetchEmergencies]);
 
-  // Hide the fleet ops banner on the dedicated driver cockpit (driver already has CrashEmergencyModal takeover)
-  if (pathname === '/driver' || emergencies.length === 0) return null;
+  if (emergencies.length === 0) return null;
 
   const current = emergencies[0];
 
@@ -52,7 +49,7 @@ export function EmergencySosBanner() {
         initial={{ y: -20, x: '-50%', opacity: 0 }}
         animate={{ y: 0, x: '-50%', opacity: 1 }}
         exit={{ y: -20, x: '-50%', opacity: 0 }}
-        className="fixed top-3 left-1/2 -translate-x-1/2 z-[9990] w-full max-w-4xl px-3 pointer-events-auto"
+        className="fixed top-3 left-1/2 -translate-x-1/2 z-[99999] w-full max-w-4xl px-3 pointer-events-auto"
       >
         <div className="flex items-center justify-between gap-2 rounded-2xl border border-rose-500/70 bg-rose-950/95 px-3 py-1.5 sm:py-2 text-white shadow-2xl shadow-rose-950/80 backdrop-blur-xl">
           {/* Pulsing indicator & Title */}

@@ -1,0 +1,31 @@
+{
+  "name": "roadscore-sim",
+  "version": "0.1.0",
+  "description": "RoadScore Realistic Multi-Driver Telemetry & OSM Route Simulator TUI",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "roadscore-sim": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "h3-js": "^4.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

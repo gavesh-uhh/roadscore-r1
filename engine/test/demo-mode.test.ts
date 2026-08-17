@@ -22,7 +22,7 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     },
     lateral: {
       ...THRESHOLDS.lateral,
-      cornerYaw: 0.20,
+      cornerYaw: 0.2,
       cornerSpeed: 0,
       excessive: { low: 2.0, medium: 3.5, high: 4.8 },
       gpsYawTolerance: 999,
@@ -60,6 +60,32 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     };
   }
 
+  function createTestRow(overrides: Partial<RawRow> = {}): RawRow {
+    return {
+      id: 1,
+      device_id: 'ROADSCORE_001',
+      seq: 1,
+      uptime_ms: 1000,
+      window_ms: 1000,
+      samples: 50,
+      ts: '2026-08-16T10:00:00Z',
+      accel_fs_g: 2,
+      gyro_fs_dps: 250,
+      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: { x: 0, y: 0, z: 16384 } },
+      accel_raw: { x: 0, y: 0, z: 16384 },
+      gyro_raw: { x: 0, y: 0, z: 0 },
+      accel_cal: { vertical_rms: 10, vertical_peak: 20, horizontal_peak: 20, magnitude_peak: 30 },
+      gyro_cal: { yaw_rate_peak: 0, pitch_rate_peak: 0, roll_rate_peak: 0 },
+      mic: { rms: 50, peak: 80 },
+      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
+      wifi_rssi: -45,
+      fw_version: '1.0.0-mcu',
+      dropped_posts: 0,
+      server_received_at: '2026-08-16T10:00:00Z',
+      ...overrides,
+    };
+  }
+
   it('automatically opens a virtual demo trip on first indoor telemetry packet', async () => {
     const sink = createMockSink();
     const log = createSilentLogger();
@@ -79,34 +105,18 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
 
     const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
 
-    const row: RawRow = {
+    const row = createTestRow({
       id: 1,
-      device_id: 'ROADSCORE_001',
       seq: 1,
       uptime_ms: 1000,
-      window_ms: 1000,
-      samples: 50,
       ts: '2026-08-16T10:00:00Z',
-      accel_fs_g: 2,
-      gyro_fs_dps: 250,
-      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
-      accel_raw: { x: 0, y: 0, z: 16384 },
-      gyro_raw: { x: 0, y: 0, z: 0 },
-      accel_cal: { vertical_rms: 10, vertical_peak: 20, horizontal_peak: 20, magnitude_peak: 30 },
-      gyro_cal: { yaw_rate_peak: 0, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 0 },
-      mic: { rms: 50, peak: 80 },
-      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
-      wifi_rssi: -45,
-      fw_version: '1.0.0-mcu',
-      dropped_posts: 0,
-      created_at: '2026-08-16T10:00:00Z',
-    };
+    });
 
     await pipeline.submit(row);
 
     expect(sink.trips.length).toBeGreaterThanOrEqual(1);
-    expect(sink.trips[0].status).toBe('open');
-    expect(sink.trips[0].deviceId).toBe('ROADSCORE_001');
+    expect(sink.trips[0]!.status).toBe('open');
+    expect(sink.trips[0]!.deviceId).toBe('ROADSCORE_001');
   });
 
   it('triggers a pothole impact candidate on intentional knuckle tap without GPS fix', async () => {
@@ -129,28 +139,14 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
 
     // Knuckle tap on desk: vertical peak = 11000 counts = ~6.58 m/s² > 5.8 m/s² threshold
-    const row: RawRow = {
+    const row = createTestRow({
       id: 2,
-      device_id: 'ROADSCORE_001',
       seq: 2,
       uptime_ms: 2000,
-      window_ms: 1000,
-      samples: 50,
       ts: '2026-08-16T10:00:01Z',
-      accel_fs_g: 2,
-      gyro_fs_dps: 250,
-      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
-      accel_raw: { x: 0, y: 0, z: 16384 },
-      gyro_raw: { x: 0, y: 0, z: 0 },
       accel_cal: { vertical_rms: 400, vertical_peak: 11000, horizontal_peak: 500, magnitude_peak: 11000 },
-      gyro_cal: { yaw_rate_peak: 0, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 0 },
       mic: { rms: 500, peak: 1200 },
-      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
-      wifi_rssi: -45,
-      fw_version: '1.0.0-mcu',
-      dropped_posts: 0,
-      created_at: '2026-08-16T10:00:01Z',
-    };
+    });
 
     await pipeline.submit(row);
 
@@ -180,28 +176,15 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
 
     // Slide across desk: horizontal peak = 6000 counts (~3.59 m/s²), vertical table rumble = 4500 counts (~2.69 m/s²)
-    const row: RawRow = {
+    const row = createTestRow({
       id: 3,
-      device_id: 'ROADSCORE_001',
       seq: 3,
       uptime_ms: 3000,
-      window_ms: 1000,
-      samples: 50,
       ts: '2026-08-16T10:00:02Z',
-      accel_fs_g: 2,
-      gyro_fs_dps: 250,
-      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
       accel_raw: { x: 3000, y: 0, z: 16384 },
-      gyro_raw: { x: 0, y: 0, z: 0 },
       accel_cal: { vertical_rms: 150, vertical_peak: 4500, horizontal_peak: 6000, magnitude_peak: 6000 },
-      gyro_cal: { yaw_rate_peak: 0, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 0 },
       mic: { rms: 100, peak: 200 },
-      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
-      wifi_rssi: -45,
-      fw_version: '1.0.0-mcu',
-      dropped_posts: 0,
-      created_at: '2026-08-16T10:00:02Z',
-    };
+    });
 
     await pipeline.submit(row);
 
@@ -231,40 +214,25 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
 
     // Step 1: Rapid twist (yaw rate = 45 deg/sec = ~5900 gyro counts)
-    const row1: RawRow = {
+    const row1 = createTestRow({
       id: 10,
-      device_id: 'ROADSCORE_001',
       seq: 10,
       uptime_ms: 10000,
-      window_ms: 1000,
-      samples: 50,
       ts: '2026-08-16T10:00:10Z',
-      accel_fs_g: 2,
-      gyro_fs_dps: 250,
-      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
-      accel_raw: { x: 0, y: 0, z: 16384 },
       gyro_raw: { x: 0, y: 0, z: 5900 },
       accel_cal: { vertical_rms: 20, vertical_peak: 50, horizontal_peak: 200, magnitude_peak: 200 },
-      gyro_cal: { yaw_rate_peak: 5900, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 5900 },
-      mic: { rms: 50, peak: 80 },
-      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
-      wifi_rssi: -45,
-      fw_version: '1.0.0-mcu',
-      dropped_posts: 0,
-      created_at: '2026-08-16T10:00:10Z',
-    };
+      gyro_cal: { yaw_rate_peak: 5900, pitch_rate_peak: 0, roll_rate_peak: 0 },
+    });
 
     // Step 2: Twist settles
-    const row2: RawRow = {
-      ...row1,
+    const row2 = createTestRow({
       id: 11,
       seq: 11,
       uptime_ms: 11000,
       ts: '2026-08-16T10:00:11Z',
       gyro_raw: { x: 0, y: 0, z: 0 },
-      gyro_cal: { yaw_rate_peak: 0, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 0 },
-      created_at: '2026-08-16T10:00:11Z',
-    };
+      gyro_cal: { yaw_rate_peak: 0, pitch_rate_peak: 0, roll_rate_peak: 0 },
+    });
 
     await pipeline.submit(row1);
     await pipeline.submit(row2);
@@ -296,40 +264,25 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
 
     // Step 1: Forward slide (horizontal peak = 5000 counts = ~2.99 m/s², raw X positive)
-    const row1: RawRow = {
+    const row1 = createTestRow({
       id: 20,
-      device_id: 'ROADSCORE_001',
       seq: 20,
       uptime_ms: 20000,
-      window_ms: 1000,
-      samples: 50,
       ts: '2026-08-16T10:00:20Z',
-      accel_fs_g: 2,
-      gyro_fs_dps: 250,
-      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
       accel_raw: { x: 4500, y: 0, z: 16384 },
-      gyro_raw: { x: 0, y: 0, z: 0 },
       accel_cal: { vertical_rms: 20, vertical_peak: 50, horizontal_peak: 5000, magnitude_peak: 5000 },
-      gyro_cal: { yaw_rate_peak: 50, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 50 },
-      mic: { rms: 50, peak: 80 },
-      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
-      wifi_rssi: -45,
-      fw_version: '1.0.0-mcu',
-      dropped_posts: 0,
-      created_at: '2026-08-16T10:00:20Z',
-    };
+      gyro_cal: { yaw_rate_peak: 50, pitch_rate_peak: 0, roll_rate_peak: 0 },
+    });
 
     // Step 2: Slide ends (motion stops)
-    const row2: RawRow = {
-      ...row1,
+    const row2 = createTestRow({
       id: 21,
       seq: 21,
       uptime_ms: 21000,
       ts: '2026-08-16T10:00:21Z',
       accel_raw: { x: 0, y: 0, z: 16384 },
       accel_cal: { vertical_rms: 10, vertical_peak: 20, horizontal_peak: 50, magnitude_peak: 50 },
-      created_at: '2026-08-16T10:00:21Z',
-    };
+    });
 
     await pipeline.submit(row1);
     await pipeline.submit(row2);
@@ -359,40 +312,25 @@ describe('Indoor DEMO_MODE Pipeline & Event Detection', () => {
     const pipeline = new Pipeline({ cfg: demoCfg, sink: sink as any, log, devices });
 
     // Step 1: Backward pull / tilt (horizontal peak = 5000 counts = ~2.99 m/s², raw X negative)
-    const row1: RawRow = {
+    const row1 = createTestRow({
       id: 30,
-      device_id: 'ROADSCORE_001',
       seq: 30,
       uptime_ms: 30000,
-      window_ms: 1000,
-      samples: 50,
       ts: '2026-08-16T10:00:30Z',
-      accel_fs_g: 2,
-      gyro_fs_dps: 250,
-      calibration: { state: 'calibrated', age_ms: 100, gravity_ref: [0, 0, 16384] },
       accel_raw: { x: -4500, y: 0, z: 16384 },
-      gyro_raw: { x: 0, y: 0, z: 0 },
       accel_cal: { vertical_rms: 20, vertical_peak: 50, horizontal_peak: 5000, magnitude_peak: 5000 },
-      gyro_cal: { yaw_rate_peak: 50, pitch_rate_peak: 0, roll_rate_peak: 0, magnitude_peak: 50 },
-      mic: { rms: 50, peak: 80 },
-      gps: { fix: false, lat: 0, lon: 0, speed_kmh: 0, heading: 0, altitude: 0, sats: 0, hdop: 99.0 },
-      wifi_rssi: -45,
-      fw_version: '1.0.0-mcu',
-      dropped_posts: 0,
-      created_at: '2026-08-16T10:00:30Z',
-    };
+      gyro_cal: { yaw_rate_peak: 50, pitch_rate_peak: 0, roll_rate_peak: 0 },
+    });
 
     // Step 2: Settle
-    const row2: RawRow = {
-      ...row1,
+    const row2 = createTestRow({
       id: 31,
       seq: 31,
       uptime_ms: 31000,
       ts: '2026-08-16T10:00:31Z',
       accel_raw: { x: 0, y: 0, z: 16384 },
       accel_cal: { vertical_rms: 10, vertical_peak: 20, horizontal_peak: 50, magnitude_peak: 50 },
-      created_at: '2026-08-16T10:00:31Z',
-    };
+    });
 
     await pipeline.submit(row1);
     await pipeline.submit(row2);

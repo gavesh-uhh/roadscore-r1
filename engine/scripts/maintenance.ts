@@ -18,6 +18,7 @@ import { createDb, closeDb, ADVISORY_LOCKS } from '../src/db/client.js';
 import type { Db } from '../src/db/client.js';
 import { THRESHOLDS, RULE_VERSION } from '../src/config/thresholds.js';
 import { rollupDaily, groupForRollup, type TripScoreInput } from '../src/score/rollup.js';
+import type { ScorableEvent } from '../src/score/penalties.js';
 import { cellToLatLng } from 'h3-js';
 import type { Trip } from '../src/types.js';
 

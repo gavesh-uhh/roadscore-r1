@@ -36,11 +36,11 @@ export function NextHazardBar({ hazard, onDismiss, className = '' }: NextHazardB
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -10, scale: 0.96 }}
               transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-              className="relative flex items-center gap-2.5 sm:gap-3 rounded-2xl bg-zinc-950/90 backdrop-blur-xl border border-zinc-800/80 shadow-2xl px-3 py-2 overflow-hidden"
+              className="relative flex items-center gap-2.5 sm:gap-3 rounded-2xl bg-zinc-950/70 backdrop-blur-2xl border border-white/10 shadow-2xl px-3 py-1.5 sm:py-2 overflow-hidden"
               style={{
-                borderLeftWidth: 4,
+                borderLeftWidth: 3.5,
                 borderLeftColor: color,
-                boxShadow: `0 20px 30px -10px rgba(0, 0, 0, 0.8), 0 0 20px -5px ${color}25`,
+                boxShadow: `0 16px 32px -8px rgba(0, 0, 0, 0.7), 0 0 16px -4px ${color}20`,
               }}
             >
               {/* Vector Icon container */}

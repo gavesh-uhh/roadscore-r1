@@ -410,47 +410,53 @@ export function HazardHorizonRadar({
         drawVectorHazardIcon(ctx, h.kind, x, y, radius);
 
         // Billboard HUD Tag Pill (Title + live distance countdown)
-        const label = h.title;
-        const dist = `${Math.max(0, Math.round(smoothed))}m`;
+        // Keep a clear top safe zone (120px) so canvas tags NEVER overlap the top NextHazardBar notification
+        const topSafeZone = 120;
+        const tagAlpha = clamp((y - topSafeZone) / 40, 0, 1);
 
-        ctx.font = '700 9.5px Inter, system-ui, -apple-system, sans-serif';
-        const titleW = ctx.measureText(label).width;
-        ctx.font = '800 11px Inter, system-ui, -apple-system, sans-serif';
-        const distW = ctx.measureText(dist).width;
+        if (tagAlpha > 0.05 && smoothed < 150) {
+          const label = h.title;
+          const dist = `${Math.max(0, Math.round(smoothed))}m`;
 
-        const padX = 7;
-        const gap = 6;
-        const pillW = padX * 2 + titleW + gap + distW;
-        const pillH = 20;
-        const pillX = clamp(x - pillW / 2, 6, width - pillW - 6);
-        const pillY = Math.max(6, y - radius - pillH - 6);
+          ctx.font = '700 9px Inter, system-ui, -apple-system, sans-serif';
+          const titleW = ctx.measureText(label).width;
+          ctx.font = '800 10.5px Inter, system-ui, -apple-system, sans-serif';
+          const distW = ctx.measureText(dist).width;
 
-        // Connector tick from pill to disc
-        ctx.beginPath();
-        ctx.moveTo(x, pillY + pillH);
-        ctx.lineTo(x, y - radius + 1);
-        ctx.strokeStyle = hexA(color, 0.6);
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
+          const padX = 6;
+          const gap = 5;
+          const pillW = padX * 2 + titleW + gap + distW;
+          const pillH = 18;
+          const pillX = clamp(x - pillW / 2, 6, width - pillW - 6);
+          const pillY = Math.max(topSafeZone, y - radius - pillH - 4);
 
-        // Pill background & border
-        ctx.beginPath();
-        pillPath(ctx, pillX, pillY, pillW, pillH, 10);
-        ctx.fillStyle = 'rgba(6, 8, 12, 0.92)';
-        ctx.fill();
-        ctx.strokeStyle = hexA(color, 0.65);
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
+          // Connector tick from pill to disc
+          ctx.beginPath();
+          ctx.moveTo(x, pillY + pillH);
+          ctx.lineTo(x, y - radius + 1);
+          ctx.strokeStyle = hexA(color, 0.45 * tagAlpha);
+          ctx.lineWidth = 1.0;
+          ctx.stroke();
 
-        // Pill typography
-        ctx.textAlign = 'left';
-        ctx.font = '600 9.5px Inter, system-ui, -apple-system, sans-serif';
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-        ctx.fillText(label, pillX + padX, pillY + pillH / 2 + 0.5);
+          // Pill background & border — sleek translucent glass
+          ctx.beginPath();
+          pillPath(ctx, pillX, pillY, pillW, pillH, 9);
+          ctx.fillStyle = `rgba(6, 8, 12, ${0.72 * tagAlpha})`;
+          ctx.fill();
+          ctx.strokeStyle = hexA(color, 0.5 * tagAlpha);
+          ctx.lineWidth = 1.0;
+          ctx.stroke();
 
-        ctx.font = '800 11px Inter, system-ui, -apple-system, sans-serif';
-        ctx.fillStyle = color;
-        ctx.fillText(dist, pillX + padX + titleW + gap, pillY + pillH / 2 + 0.5);
+          // Pill typography
+          ctx.textAlign = 'left';
+          ctx.font = '600 9px Inter, system-ui, -apple-system, sans-serif';
+          ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * tagAlpha})`;
+          ctx.fillText(label, pillX + padX, pillY + pillH / 2 + 0.5);
+
+          ctx.font = '800 10.5px Inter, system-ui, -apple-system, sans-serif';
+          ctx.fillStyle = hexA(color, tagAlpha);
+          ctx.fillText(dist, pillX + padX + titleW + gap, pillY + pillH / 2 + 0.5);
+        }
       }
 
       // Cleanup departed hazards

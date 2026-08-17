@@ -268,9 +268,10 @@ export default function VehiclesPage() {
                   </td>
                 </tr>
               ) : (
-                filteredVehicles.map((vehicle) => {
+                filteredVehicles.map((vehicle, idx) => {
+                  const rowKey = vehicle.id ? `veh-${vehicle.id}-${idx}` : `veh-${idx}`;
                   return (
-                    <tr key={vehicle.id} className="hover:bg-zinc-900/50 transition-colors">
+                    <tr key={rowKey} className="hover:bg-zinc-900/50 transition-colors">
                       {/* Plate */}
                       <td className="p-3">
                         <div className="flex items-center gap-2">

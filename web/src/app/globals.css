@@ -10,6 +10,18 @@
   --border-muted: #1c1c1c;
   --text-muted: #888888;
   --text-dim: #666666;
+
+  /* Driver cockpit tokens (DRIVER_VIEW_UI_POLISH_PLAN §6) */
+  --drv-bg: #000000;
+  --drv-surface: rgba(10, 10, 10, 0.85);
+  --drv-border: #1c1c1c;
+  --drv-text: #ffffff;
+  --drv-text-dim: #8b8b94;
+  --drv-accent: #10b981;
+  --drv-warn: #f59e0b;
+  --drv-danger: #f43f5e;
+  --drv-info: #38bdf8;
+  --drv-curve: #a78bfa;
 }
 
 body {

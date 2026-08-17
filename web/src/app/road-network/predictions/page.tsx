@@ -466,11 +466,12 @@ export default function PredictionsAndVerification() {
                         </td>
                       </tr>
                     ) : (
-                      filteredPredictions.map((p) => {
+                      filteredPredictions.map((p, idx) => {
                         const isSelected = selectedPrediction?.id === p.id;
+                        const rowKey = p.id ? `pred-${p.id}-${idx}` : `pred-${idx}`;
                         return (
                           <tr
-                            key={p.id}
+                            key={rowKey}
                             onClick={() => handleSelectPrediction(p)}
                             className={`cursor-pointer transition-colors ${
                               isSelected ? 'bg-zinc-800/80 text-white' : 'hover:bg-zinc-900/40 text-zinc-300'
@@ -560,9 +561,9 @@ export default function PredictionsAndVerification() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-900/80 font-mono text-[11px]">
-                  {filteredPredictions.map((p) => (
+                  {filteredPredictions.map((p, idx) => (
                     <tr
-                      key={p.id}
+                      key={p.id ? `pred-full-${p.id}-${idx}` : `pred-full-${idx}`}
                       onClick={() => handleSelectPrediction(p)}
                       className="hover:bg-zinc-900/40 transition-colors cursor-pointer"
                     >

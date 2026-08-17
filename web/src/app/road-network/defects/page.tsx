@@ -360,11 +360,12 @@ export default function ConfirmedDefectsInventory() {
                       </td>
                     </tr>
                   ) : (
-                    filteredDefects.map((d) => {
+                    filteredDefects.map((d, idx) => {
                       const isSelected = selectedDefect?.id === d.id;
+                      const rowKey = d.id ? `def-${d.id}-${idx}` : `def-${idx}`;
                       return (
                         <tr
-                          key={d.id}
+                          key={rowKey}
                           onClick={() => handleSelectDefect(d)}
                           className={`cursor-pointer transition-colors ${
                             isSelected

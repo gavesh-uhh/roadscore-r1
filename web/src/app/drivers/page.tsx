@@ -522,7 +522,7 @@ export default function DriversLeaderboard() {
                     </tr>
                   ) : (
                     filteredDrivers.map((d, idx) => (
-                      <tr key={d.id} className="hover:bg-zinc-900/50 transition-colors">
+                      <tr key={d.id ? `drv-${d.id}-${idx}` : `drv-${idx}`} className="hover:bg-zinc-900/50 transition-colors">
                         {/* Rank */}
                         <td className="px-3.5 py-2 text-center font-mono font-bold text-zinc-500 text-[11px]">
                           {idx + 1}

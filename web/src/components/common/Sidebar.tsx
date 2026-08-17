@@ -15,10 +15,12 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  CarFront,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Overview', icon: LayoutDashboard, exact: true },
+  { href: '/driver', label: 'Driver View', icon: CarFront },
   { href: '/routing', label: 'Smart Routing', icon: Navigation },
   { href: '/drivers', label: 'Drivers', icon: Users },
   { href: '/vehicles', label: 'Vehicles', icon: Car },

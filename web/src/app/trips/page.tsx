@@ -312,7 +312,7 @@ export default function TripsExplorer() {
                     </td>
                   </tr>
                 ) : (
-                  filteredTrips.map((trip) => {
+                  filteredTrips.map((trip, idx) => {
                     const tripIdStr = String(trip.trip_id || '');
                     const durationStr = getTripDurationFormatted(trip);
                     const distanceKm = ((trip.distance_m || 0) / 1000).toFixed(1);
@@ -321,9 +321,10 @@ export default function TripsExplorer() {
                     const st = trip.status;
                     const isOpen = (st === 'open' || !trip.ended_at) && st !== 'closed' && st !== 'abandoned';
                     const isClosing = closingTripIds.has(tripIdStr);
+                    const rowKey = tripIdStr ? `trip-${tripIdStr}-${idx}` : `trip-${idx}`;
 
                     return (
-                      <tr key={tripIdStr} className="hover:bg-zinc-900/50 transition-colors">
+                      <tr key={rowKey} className="hover:bg-zinc-900/50 transition-colors">
                         <td className="p-3 font-mono">
                           <div className="font-semibold text-white">
                             {tripIdStr.length > 18 ? `${tripIdStr.slice(0, 18)}...` : tripIdStr}

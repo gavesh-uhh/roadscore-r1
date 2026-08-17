@@ -94,7 +94,11 @@ export default function RoadNetworkQuality() {
         if (mapped.length > 0) {
           setSelectedCell((prev) => {
             if (prev) {
-              const stillExists = mapped.find((m) => m.h3_12 === prev.h3_12);
+              const stillExists = mapped.find(
+                (m) =>
+                  m.h3_12 === prev.h3_12 &&
+                  (prev.heading_sector === undefined || m.heading_sector === prev.heading_sector)
+              );
               if (stillExists) return stillExists;
             }
             return mapped[0];
@@ -156,7 +160,8 @@ export default function RoadNetworkQuality() {
   const mapHexagons: MapHexagon[] = useMemo(() => {
     const list: MapHexagon[] = [];
 
-    for (const cell of filteredCells) {
+    for (let idx = 0; idx < filteredCells.length; idx++) {
+      const cell = filteredCells[idx];
       if (!cell.h3_12) continue;
       let boundary: [number, number][] = [];
       try {
@@ -171,10 +176,14 @@ export default function RoadNetworkQuality() {
       else if (cell.roughness_index >= 55) color = '#f97316';
       else if (cell.roughness_index >= 25) color = '#eab308';
 
-      const isSelected = selectedCell?.h3_12 === cell.h3_12;
+      const isSelected =
+        selectedCell?.h3_12 === cell.h3_12 &&
+        (selectedCell?.heading_sector === undefined || selectedCell?.heading_sector === cell.heading_sector);
+
+      const hexId = cell.heading_sector !== undefined ? `${cell.h3_12}_${cell.heading_sector}` : `${cell.h3_12}_${idx}`;
 
       list.push({
-        id: cell.h3_12,
+        id: hexId,
         boundary,
         color: isSelected ? '#38bdf8' : color,
         fillOpacity: isSelected ? 0.75 : 0.45,
@@ -183,7 +192,7 @@ export default function RoadNetworkQuality() {
         spikeCount: cell.spike_count,
         speedP85: cell.speed_p85_kmh,
         defectConfidence: cell.defect_confidence,
-        tooltipText: `H3: ${cell.h3_12} | Roughness: ${cell.roughness_index.toFixed(1)}/100 | Passes: ${cell.pass_count}`,
+        tooltipText: `H3: ${cell.h3_12}${cell.heading_sector !== undefined ? ` (Sector ${cell.heading_sector})` : ''} | Roughness: ${cell.roughness_index.toFixed(1)}/100 | Passes: ${cell.pass_count}`,
       });
     }
 
@@ -279,7 +288,10 @@ export default function RoadNetworkQuality() {
             zoom={mapZoom}
             hexagons={mapHexagons}
             onHexagonClick={(hex) => {
-              const matched = roadCells.find((c) => c.h3_12 === hex.id);
+              const matched = roadCells.find((c) => {
+                const hexId = c.heading_sector !== undefined ? `${c.h3_12}_${c.heading_sector}` : c.h3_12;
+                return hexId === hex.id || c.h3_12 === hex.id;
+              });
               if (matched) handleSelectCell(matched);
             }}
           />
@@ -438,11 +450,18 @@ export default function RoadNetworkQuality() {
                 No matching cells found.
               </div>
             ) : (
-              filteredCells.map((cell) => {
-                const isSelected = selectedCell?.h3_12 === cell.h3_12;
+              filteredCells.map((cell, idx) => {
+                const isSelected =
+                  selectedCell?.h3_12 === cell.h3_12 &&
+                  (selectedCell?.heading_sector === undefined || selectedCell?.heading_sector === cell.heading_sector);
+                const cellKey =
+                  cell.heading_sector !== undefined
+                    ? `cell-${cell.h3_12}-s${cell.heading_sector}-${idx}`
+                    : `cell-${cell.h3_12}-${idx}`;
+
                 return (
                   <div
-                    key={cell.h3_12}
+                    key={cellKey}
                     onClick={() => handleSelectCell(cell)}
                     className={`p-2 rounded border cursor-pointer transition-colors font-mono text-[11px] flex items-center justify-between ${
                       isSelected
@@ -451,8 +470,13 @@ export default function RoadNetworkQuality() {
                     }`}
                   >
                     <div className="min-w-0 pr-2">
-                      <div className="font-semibold text-zinc-200 text-xs truncate">
-                        {cell.h3_12}
+                      <div className="font-semibold text-zinc-200 text-xs truncate flex items-center gap-1.5">
+                        <span>{cell.h3_12}</span>
+                        {cell.heading_sector !== undefined && (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 font-normal">
+                            sec {cell.heading_sector}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[10px] text-zinc-500 flex items-center gap-2 pt-0.5">
                         <span>{cell.pass_count} passes</span>

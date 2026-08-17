@@ -74,6 +74,7 @@ interface TripRow {
 
 interface RoadCellRow {
   h3_12: string;
+  heading_sector?: number;
   roughness_index: number;
   pass_count: number;
   spike_count: number;
@@ -468,7 +469,8 @@ export default function UnifiedOperationsDesk() {
   // Build H3 Hexagons directly from DB road_cells
   const mapHexagons: MapHexagon[] = useMemo(() => {
     const list: MapHexagon[] = [];
-    for (const cell of roadCells) {
+    for (let idx = 0; idx < roadCells.length; idx++) {
+      const cell = roadCells[idx];
       if (!cell.h3_12) continue;
       let boundary: [number, number][] = [];
       try {
@@ -483,8 +485,10 @@ export default function UnifiedOperationsDesk() {
       else if (cell.roughness_index >= 50) color = '#f97316';
       else if (cell.roughness_index >= 25) color = '#eab308';
 
+      const hexId = cell.heading_sector !== undefined ? `${cell.h3_12}_${cell.heading_sector}` : `${cell.h3_12}_${idx}`;
+
       list.push({
-        id: cell.h3_12,
+        id: hexId,
         boundary,
         color,
         fillOpacity: 0.35,

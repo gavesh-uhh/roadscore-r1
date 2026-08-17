@@ -17,13 +17,16 @@ export interface RoutePreset {
   isRecommended: boolean;
   distanceKm: number;
   durationMins: number;
-  potholesHit: number;
-  smoothnessScore: number; // 0 - 100
+  potholesHit: number | null;
+  smoothnessScore: number | null; // 0 - 100 or null if insufficient telemetry
+  avgRoughness: number | null;
   coveragePct: number; // 0 - 100% of route with actual fleet H3 passes
-  coverageStatus: 'verified' | 'partial' | 'estimated';
+  coverageStatus: 'verified' | 'partial' | 'sparse' | 'unmapped';
+  hasSufficientData: boolean;
   color: string;
   dashArray?: string;
   polyline: [number, number][]; // [lat, lon] array
+  traversedH3Cells: string[];
 }
 
 export interface DefectRecord {
@@ -91,7 +94,7 @@ export const PRESET_LOCATIONS: LocationItem[] = [
 ];
 
 // Haversine distance in meters
-function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+export function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371000;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
@@ -105,14 +108,23 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
   return R * c;
 }
 
-// Fetch real street geometry from OSRM public routing API
-async function fetchOsrmGeometry(
+export interface OsrmRouteResult {
+  coordinates: [number, number][];
+  distanceM: number;
+  durationS: number;
+}
+
+/**
+ * Fetch genuine street-level route alternatives from OSRM driving service.
+ * Never generates synthetic or mathematical bezier geometry.
+ */
+export async function fetchOsrmRoutes(
   startLat: number,
   startLon: number,
   endLat: number,
   endLon: number,
   waypoint?: [number, number]
-): Promise<{ coordinates: [number, number][]; distanceM: number; durationS: number } | null> {
+): Promise<OsrmRouteResult[]> {
   try {
     let url = `https://router.project-osrm.org/route/v1/driving/${startLon},${startLat};`;
     if (waypoint) {
@@ -120,158 +132,209 @@ async function fetchOsrmGeometry(
     }
     url += `${endLon},${endLat}?overview=full&geometries=geojson&alternatives=true`;
 
-    const res = await fetch(url, { signal: AbortSignal.timeout(3500) });
-    if (!res.ok) return null;
+    const res = await fetch(url, { signal: AbortSignal.timeout(4500) });
+    if (!res.ok) return [];
     const data = await res.json();
-    if (!data.routes || data.routes.length === 0) return null;
+    if (!data.routes || !Array.isArray(data.routes) || data.routes.length === 0) {
+      return [];
+    }
 
-    const primary = data.routes[0];
-    const coords: [number, number][] = primary.geometry.coordinates.map(
-      (c: [number, number]) => [c[1], c[0]] // GeoJSON [lon, lat] -> Leaflet [lat, lon]
-    );
+    return data.routes.map((r: any) => {
+      const coords: [number, number][] = (r.geometry?.coordinates || []).map(
+        (c: [number, number]) => [c[1], c[0]] // GeoJSON [lon, lat] -> Leaflet [lat, lon]
+      );
+      return {
+        coordinates: coords,
+        distanceM: Number(r.distance || 0),
+        durationS: Number(r.duration || 0),
+      };
+    }).filter((r: OsrmRouteResult) => r.coordinates.length > 1 && r.distanceM > 0);
+  } catch (err) {
+    console.warn('OSRM route fetch failed:', err);
+    return [];
+  }
+}
 
-    return {
-      coordinates: coords,
-      distanceM: primary.distance || 0,
-      durationS: primary.duration || 0,
-    };
+/**
+ * Accurately sample deduplicated H3-12 cells (~9.4m resolution) along actual OSRM road geometry.
+ */
+export function extractRouteH3Cells(polyline: [number, number][], stepMeters: number = 8): string[] {
+  if (polyline.length === 0) return [];
+
+  const cellSet = new Set<string>();
+
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const p1 = polyline[i];
+    const p2 = polyline[i + 1];
+    const segmentDist = haversineMeters(p1[0], p1[1], p2[0], p2[1]);
+    const steps = Math.max(1, Math.ceil(segmentDist / stepMeters));
+
+    for (let s = 0; s <= steps; s++) {
+      const frac = s / steps;
+      const lat = p1[0] + frac * (p2[0] - p1[0]);
+      const lon = p1[1] + frac * (p2[1] - p1[1]);
+      try {
+        const cell = latLngToCell(lat, lon, 12);
+        if (cell) cellSet.add(cell);
+      } catch {
+        // ignore invalid coordinates
+      }
+    }
+  }
+
+  // Ensure final point is indexed
+  const last = polyline[polyline.length - 1];
+  try {
+    const lastCell = latLngToCell(last[0], last[1], 12);
+    if (lastCell) cellSet.add(lastCell);
   } catch {
-    return null;
+    // ignore
   }
+
+  return Array.from(cellSet);
 }
 
-// Fallback street path interpolator if external routing API is unreachable
-function generateFallbackStreetPath(
-  start: [number, number],
-  end: [number, number],
-  curveOffset: number,
-  points: number = 24
-): [number, number][] {
-  const result: [number, number][] = [];
-  const midLat = (start[0] + end[0]) / 2;
-  const midLon = (start[1] + end[1]) / 2;
-  const dLat = end[0] - start[0];
-  const dLon = end[1] - start[1];
-  const len = Math.sqrt(dLat * dLat + dLon * dLon) || 1;
-  const orthoLat = -dLon / len;
-  const orthoLon = dLat / len;
-
-  const ctrlLat = midLat + orthoLat * curveOffset;
-  const ctrlLon = midLon + orthoLon * curveOffset;
-
-  for (let i = 0; i <= points; i++) {
-    const t = i / points;
-    const lat = (1 - t) * (1 - t) * start[0] + 2 * (1 - t) * t * ctrlLat + t * t * end[0];
-    const lon = (1 - t) * (1 - t) * start[1] + 2 * (1 - t) * t * ctrlLon + t * t * end[1];
-    result.push([lat, lon]);
-  }
-  return result;
-}
-
-// Evaluate a route polyline against real database H3 cells and road defects
-function evaluateRoute(
+/**
+ * Evaluates route polyline strictly against real Supabase H3 spatial cells and confirmed defects.
+ * No hardcoded baselines, no forced zeros, no fabricated precision.
+ */
+export function evaluateRoute(
   polyline: [number, number][],
+  traversedH3Cells: string[],
   roadCells: RoadCellRecord[],
-  roadDefects: DefectRecord[],
-  isSafePreset: boolean = false
+  roadDefects: DefectRecord[]
 ): {
-  potholesHit: number;
-  smoothnessScore: number;
-  avgRoughness: number;
+  potholesHit: number | null;
+  smoothnessScore: number | null;
+  avgRoughness: number | null;
   matchedCellsCount: number;
+  totalRouteCellsCount: number;
   coveragePct: number;
-  coverageStatus: 'verified' | 'partial' | 'estimated';
+  coverageStatus: 'verified' | 'partial' | 'sparse' | 'unmapped';
+  hasSufficientData: boolean;
 } {
-  // Build fast lookup map for H3-12 cells
+  const totalRouteCellsCount = traversedH3Cells.length;
+
+  if (totalRouteCellsCount === 0 || polyline.length === 0) {
+    return {
+      potholesHit: null,
+      smoothnessScore: null,
+      avgRoughness: null,
+      matchedCellsCount: 0,
+      totalRouteCellsCount: 0,
+      coveragePct: 0,
+      coverageStatus: 'unmapped',
+      hasSufficientData: false,
+    };
+  }
+
+  // Fast cell map lookup
   const cellMap = new Map<string, RoadCellRecord>();
   roadCells.forEach((c) => {
     if (c.h3_12) cellMap.set(c.h3_12, c);
   });
 
-  const validDefects = roadDefects.filter((d) => d.lat && d.lon && (d.confidence ?? 1) >= 0.5);
+  const validDefects = roadDefects.filter(
+    (d) => d.lat && d.lon && (d.confidence ?? 1) >= 0.5
+  );
 
   let defectHits = 0;
   let totalRoughness = 0;
   let matchedCells = 0;
+  let spikeHits = 0;
 
-  // 1. Defect proximity collision check
+  // 1. Defect proximity check along route polyline (within 25 meters)
+  const hitDefectIds = new Set<string>();
   for (const d of validDefects) {
     for (const p of polyline) {
-      if (haversineMeters(p[0], p[1], d.lat!, d.lon!) <= 30) {
-        defectHits++;
+      if (haversineMeters(p[0], p[1], d.lat!, d.lon!) <= 25) {
+        hitDefectIds.add(d.id);
         break;
       }
     }
   }
+  defectHits = hitDefectIds.size;
 
-  // 2. Direct H3-12 cell indexing + neighborhood lookup (gridDisk)
-  polyline.forEach(([lat, lon]) => {
-    try {
-      const h3Index = latLngToCell(lat, lon, 12);
-      let matched = cellMap.get(h3Index);
+  // 2. Traversed H3-12 cells evaluation
+  traversedH3Cells.forEach((h3Index) => {
+    let matched = cellMap.get(h3Index);
 
-      // If exact 3.3m cell has no data, check 1-ring neighbors (10m radius)
-      if (!matched) {
-        try {
-          const neighbors = gridDisk(h3Index, 1);
-          for (const n of neighbors) {
-            const found = cellMap.get(n);
-            if (found) {
-              matched = found;
-              break;
-            }
+    // If exact cell unobserved, check 1-ring neighborhood (~10m)
+    if (!matched) {
+      try {
+        const neighbors = gridDisk(h3Index, 1);
+        for (const n of neighbors) {
+          const found = cellMap.get(n);
+          if (found) {
+            matched = found;
+            break;
           }
-        } catch {
-          // fallback if gridDisk fails
         }
+      } catch {
+        // ignore gridDisk error
       }
+    }
 
-      if (matched && matched.roughness_index !== undefined && matched.roughness_index !== null) {
-        totalRoughness += Number(matched.roughness_index);
-        matchedCells++;
-        if ((matched.spike_count ?? 0) > 0 || (matched.defect_confidence ?? 0) >= 0.6) {
-          defectHits++;
-        }
+    if (matched && matched.roughness_index !== undefined && matched.roughness_index !== null) {
+      totalRoughness += Number(matched.roughness_index);
+      matchedCells++;
+      if ((matched.spike_count ?? 0) > 0 || (matched.defect_confidence ?? 0) >= 0.6) {
+        spikeHits++;
       }
-    } catch {
-      // ignore invalid coordinates
     }
   });
 
-  // Calculate average roughness:
-  // - If real H3 cells exist: use exact calculated average
-  // - If sparse/unexplored road: use empirical highway baseline priors (Safe=12.5, Balanced=24.0, Fast=42.0)
-  let avgRoughness = matchedCells > 0 
-    ? totalRoughness / matchedCells 
-    : isSafePreset ? 12.5 : 38.0;
+  // Calculate actual coverage based on unique route H3 cells
+  const coveragePct = Math.min(
+    100,
+    Math.round((matchedCells / Math.max(1, totalRouteCellsCount)) * 100)
+  );
 
-  // Safe preset guarantees bypass around known unmaintained segments
-  if (isSafePreset) {
-    defectHits = 0;
-    avgRoughness = Math.min(avgRoughness, 14.2);
+  const hasSufficientData = matchedCells >= 3 && coveragePct >= 10;
+
+  // If insufficient data: do not fabricate roughness or smoothness
+  if (!hasSufficientData) {
+    return {
+      potholesHit: defectHits > 0 ? defectHits : null,
+      smoothnessScore: null,
+      avgRoughness: null,
+      matchedCellsCount: matchedCells,
+      totalRouteCellsCount,
+      coveragePct,
+      coverageStatus: coveragePct > 0 ? 'sparse' : 'unmapped',
+      hasSufficientData: false,
+    };
   }
 
-  // Smoothness score (0 to 100%)
-  const smoothnessScore = Math.max(15, Math.min(99, Math.round(100 - avgRoughness * 0.85 - defectHits * 8)));
+  // Compute metrics strictly from observed telemetry
+  const avgRoughness = Number((totalRoughness / matchedCells).toFixed(1));
+  const totalDefects = defectHits + spikeHits;
 
-  // Coverage metrics
-  const coveragePct = Math.min(100, Math.round((matchedCells / Math.max(1, polyline.length)) * 100));
-  const coverageStatus: 'verified' | 'partial' | 'estimated' =
-    coveragePct >= 65 ? 'verified' : coveragePct >= 20 ? 'partial' : 'estimated';
+  // Smoothness score strictly derived from observed roughness and verified defects
+  const smoothnessScore = Math.max(
+    0,
+    Math.min(100, Math.round(100 - avgRoughness * 0.85 - totalDefects * 8))
+  );
+
+  const coverageStatus: 'verified' | 'partial' | 'sparse' =
+    coveragePct >= 65 ? 'verified' : coveragePct >= 20 ? 'partial' : 'sparse';
 
   return {
-    potholesHit: defectHits,
+    potholesHit: totalDefects,
     smoothnessScore,
-    avgRoughness: Number(avgRoughness.toFixed(1)),
+    avgRoughness,
     matchedCellsCount: matchedCells,
+    totalRouteCellsCount,
     coveragePct,
     coverageStatus,
+    hasSufficientData: true,
   };
 }
 
 /**
- * Calculates 3 laser-accurate route presets: Fast, Safe, and Balanced.
- * Uses real street-level network geometry from OSRM with fallback resiliency.
+ * Calculates genuine route alternatives using real OSRM road network geometry
+ * and evaluates each route strictly against H3 road telemetry.
+ * Returns empty array if routing service is unreachable (never creates synthetic geometry).
  */
 export async function calculateThreePresets(
   origin: LocationItem,
@@ -282,88 +345,164 @@ export async function calculateThreePresets(
   const start: [number, number] = [origin.lat, origin.lon];
   const end: [number, number] = [destination.lat, destination.lon];
 
-  // 1. FAST ROUTE: Direct arterial street route
-  const fastResult = await fetchOsrmGeometry(start[0], start[1], end[0], end[1]);
-  const fastPolyline = fastResult?.coordinates || generateFallbackStreetPath(start, end, 0.001);
-  const directDistM = fastResult?.distanceM || haversineMeters(start[0], start[1], end[0], end[1]);
-  const fastDistKm = Number((Math.max(1200, directDistM) / 1000).toFixed(1));
-  const fastDurationMins = fastResult?.durationS ? Math.round(fastResult.durationS / 60) : Math.round(fastDistKm * 1.8);
+  // 1. Fetch direct OSRM routes (with alternatives=true)
+  const primaryRoutes = await fetchOsrmRoutes(start[0], start[1], end[0], end[1]);
 
-  const fastStats = evaluateRoute(fastPolyline, roadCells, roadDefects, false);
+  if (primaryRoutes.length === 0) {
+    // Graceful routing unavailable state - zero fabricated geometry
+    return [];
+  }
 
-  const fastRoute: RoutePreset = {
+  // Collect candidate genuine road routes
+  const candidateRoutes: OsrmRouteResult[] = [...primaryRoutes];
+
+  // If OSRM only returned 1 direct route, fetch real road detour alternatives via intermediate street waypoints
+  if (candidateRoutes.length < 2) {
+    const midLat = (start[0] + end[0]) / 2;
+    const midLon = (start[1] + end[1]) / 2;
+    const dLat = end[0] - start[0];
+    const dLon = end[1] - start[1];
+    const len = Math.sqrt(dLat * dLat + dLon * dLon) || 1;
+
+    // Alternative street corridor waypoint 1
+    const wp1: [number, number] = [midLat - (dLon / len) * 0.008, midLon + (dLat / len) * 0.008];
+    const altRoutes1 = await fetchOsrmRoutes(start[0], start[1], end[0], end[1], wp1);
+    if (altRoutes1.length > 0) {
+      candidateRoutes.push(altRoutes1[0]);
+    }
+
+    // Alternative street corridor waypoint 2
+    if (candidateRoutes.length < 3) {
+      const wp2: [number, number] = [midLat + (dLon / len) * 0.006, midLon - (dLat / len) * 0.006];
+      const altRoutes2 = await fetchOsrmRoutes(start[0], start[1], end[0], end[1], wp2);
+      if (altRoutes2.length > 0) {
+        candidateRoutes.push(altRoutes2[0]);
+      }
+    }
+  }
+
+  // Deduplicate candidate routes by geometry signature
+  const uniqueRoutes: OsrmRouteResult[] = [];
+  const seenDistances = new Set<number>();
+  for (const cr of candidateRoutes) {
+    const distKey = Math.round(cr.distanceM / 10);
+    if (!seenDistances.has(distKey)) {
+      seenDistances.add(distKey);
+      uniqueRoutes.push(cr);
+    }
+    if (uniqueRoutes.length >= 3) break;
+  }
+
+  // If only 1 unique route found, use it as primary
+  const evaluatedCandidates = uniqueRoutes.map((routeResult) => {
+    const traversedH3Cells = extractRouteH3Cells(routeResult.coordinates);
+    const evaluation = evaluateRoute(
+      routeResult.coordinates,
+      traversedH3Cells,
+      roadCells,
+      roadDefects
+    );
+    const distanceKm = Number((routeResult.distanceM / 1000).toFixed(1));
+    const durationMins = Math.max(1, Math.round(routeResult.durationS / 60));
+
+    return {
+      routeResult,
+      traversedH3Cells,
+      evaluation,
+      distanceKm,
+      durationMins,
+    };
+  });
+
+  // Rank routes based on genuine evidence:
+  // - Fast Route: Shortest transit duration from OSRM
+  // - Safe Route: Highest verified smoothness / lowest roughness & potholes
+  // - Balanced Route: Moderate trade-off
+  const sortedByTime = [...evaluatedCandidates].sort((a, b) => a.durationMins - b.durationMins);
+  const fastCandidate = sortedByTime[0];
+
+  const sortedBySafety = [...evaluatedCandidates].sort((a, b) => {
+    const scoreA = a.evaluation.smoothnessScore ?? -1;
+    const scoreB = b.evaluation.smoothnessScore ?? -1;
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    return (a.evaluation.potholesHit ?? 999) - (b.evaluation.potholesHit ?? 999);
+  });
+
+  const safeCandidate = sortedBySafety[0] || fastCandidate;
+  const remainingCandidates = evaluatedCandidates.filter(
+    (c) => c !== fastCandidate && c !== safeCandidate
+  );
+  const balancedCandidate = remainingCandidates[0] || evaluatedCandidates[1] || fastCandidate;
+
+  // Build RoutePreset objects with 100% genuine data
+  const fastPreset: RoutePreset = {
     id: 'fast',
     title: 'Fast Route',
-    subtitle: 'Shortest transit time along direct arterial roads.',
+    subtitle: fastCandidate.evaluation.hasSufficientData
+      ? `Shortest transit time via arterial road network (${fastCandidate.durationMins} mins).`
+      : `Shortest road network transit time (${fastCandidate.durationMins} mins). Telemetry unmapped.`,
     badge: 'Fastest',
-    isRecommended: false,
-    distanceKm: fastDistKm,
-    durationMins: Math.max(4, fastDurationMins),
-    potholesHit: fastStats.potholesHit,
-    smoothnessScore: fastStats.smoothnessScore,
-    coveragePct: fastStats.coveragePct,
-    coverageStatus: fastStats.coverageStatus,
+    isRecommended: !safeCandidate.evaluation.hasSufficientData || fastCandidate === safeCandidate,
+    distanceKm: fastCandidate.distanceKm,
+    durationMins: fastCandidate.durationMins,
+    potholesHit: fastCandidate.evaluation.potholesHit,
+    smoothnessScore: fastCandidate.evaluation.smoothnessScore,
+    avgRoughness: fastCandidate.evaluation.avgRoughness,
+    coveragePct: fastCandidate.evaluation.coveragePct,
+    coverageStatus: fastCandidate.evaluation.coverageStatus,
+    hasSufficientData: fastCandidate.evaluation.hasSufficientData,
     color: '#ef4444', // Red
     dashArray: '6, 6',
-    polyline: fastPolyline,
+    polyline: fastCandidate.routeResult.coordinates,
+    traversedH3Cells: fastCandidate.traversedH3Cells,
   };
 
-  // 2. SAFE ROUTE (Recommended): Bypasses rough corridors & potholes
-  // Compute safe detour waypoint away from baseline corridor
-  const midLat = (start[0] + end[0]) / 2;
-  const midLon = (start[1] + end[1]) / 2;
-  const dLat = end[0] - start[0];
-  const dLon = end[1] - start[1];
-  const len = Math.sqrt(dLat * dLat + dLon * dLon) || 1;
-  const safeWaypoint: [number, number] = [midLat - (dLon / len) * 0.008, midLon + (dLat / len) * 0.008];
-
-  const safeResult = await fetchOsrmGeometry(start[0], start[1], end[0], end[1], safeWaypoint);
-  const safePolyline = safeResult?.coordinates || generateFallbackStreetPath(start, end, 0.0075);
-  const safeDistKm = Number((fastDistKm * 1.08).toFixed(1));
-  const safeDurationMins = Math.round(safeDistKm * 2.0 + 2);
-
-  const safeStats = evaluateRoute(safePolyline, roadCells, roadDefects, true);
-
-  const safeRoute: RoutePreset = {
+  const safePreset: RoutePreset = {
     id: 'safe',
     title: 'Safe Route',
-    subtitle: 'Zero severe pothole exposure. Optimizes smooth road traversal.',
-    badge: 'Recommended',
-    isRecommended: true,
-    distanceKm: safeDistKm,
-    durationMins: safeDurationMins,
-    potholesHit: safeStats.potholesHit,
-    smoothnessScore: safeStats.smoothnessScore,
-    coveragePct: safeStats.coveragePct,
-    coverageStatus: safeStats.coverageStatus,
+    subtitle: safeCandidate.evaluation.hasSufficientData
+      ? `Surface-optimized road route based on ${safeCandidate.evaluation.coveragePct}% verified fleet H3 telemetry.`
+      : 'Alternative road corridor. Insufficient fleet observations to verify surface quality.',
+    badge: safeCandidate.evaluation.hasSufficientData ? 'Recommended' : 'Alternative',
+    isRecommended: safeCandidate.evaluation.hasSufficientData && safeCandidate !== fastCandidate,
+    distanceKm: safeCandidate.distanceKm,
+    durationMins: safeCandidate.durationMins,
+    potholesHit: safeCandidate.evaluation.potholesHit,
+    smoothnessScore: safeCandidate.evaluation.smoothnessScore,
+    avgRoughness: safeCandidate.evaluation.avgRoughness,
+    coveragePct: safeCandidate.evaluation.coveragePct,
+    coverageStatus: safeCandidate.evaluation.coverageStatus,
+    hasSufficientData: safeCandidate.evaluation.hasSufficientData,
     color: '#10b981', // Emerald Green
-    polyline: safePolyline,
+    polyline: safeCandidate.routeResult.coordinates,
+    traversedH3Cells: safeCandidate.traversedH3Cells,
   };
 
-  // 3. BALANCED ROUTE: Optimum trade-off
-  const balancedWaypoint: [number, number] = [midLat + (dLon / len) * 0.005, midLon - (dLat / len) * 0.005];
-  const balancedResult = await fetchOsrmGeometry(start[0], start[1], end[0], end[1], balancedWaypoint);
-  const balancedPolyline = balancedResult?.coordinates || generateFallbackStreetPath(start, end, -0.0045);
-  const balancedDistKm = Number((fastDistKm * 1.04).toFixed(1));
-  const balancedDurationMins = Math.round(balancedDistKm * 1.9 + 1);
+  const presets: RoutePreset[] = [safePreset, fastPreset];
 
-  const balancedStats = evaluateRoute(balancedPolyline, roadCells, roadDefects, false);
+  if (uniqueRoutes.length >= 2 && balancedCandidate !== fastCandidate && balancedCandidate !== safeCandidate) {
+    const balancedPreset: RoutePreset = {
+      id: 'balanced',
+      title: 'Balanced Route',
+      subtitle: balancedCandidate.evaluation.hasSufficientData
+        ? `Intermediate corridor balancing transit time and observed surface roughness.`
+        : 'Alternative road network corridor. Unmapped surface telemetry.',
+      badge: 'Balanced',
+      isRecommended: false,
+      distanceKm: balancedCandidate.distanceKm,
+      durationMins: balancedCandidate.durationMins,
+      potholesHit: balancedCandidate.evaluation.potholesHit,
+      smoothnessScore: balancedCandidate.evaluation.smoothnessScore,
+      avgRoughness: balancedCandidate.evaluation.avgRoughness,
+      coveragePct: balancedCandidate.evaluation.coveragePct,
+      coverageStatus: balancedCandidate.evaluation.coverageStatus,
+      hasSufficientData: balancedCandidate.evaluation.hasSufficientData,
+      color: '#f59e0b', // Amber
+      polyline: balancedCandidate.routeResult.coordinates,
+      traversedH3Cells: balancedCandidate.traversedH3Cells,
+    };
+    presets.push(balancedPreset);
+  }
 
-  const balancedRoute: RoutePreset = {
-    id: 'balanced',
-    title: 'Balanced Route',
-    subtitle: 'Avoids critical road damage with minimum extra distance.',
-    badge: 'Balanced',
-    isRecommended: false,
-    distanceKm: balancedDistKm,
-    durationMins: balancedDurationMins,
-    potholesHit: Math.max(0, Math.min(2, Math.floor(fastStats.potholesHit / 2))),
-    smoothnessScore: Math.min(92, Math.max(78, Math.round((safeStats.smoothnessScore + fastStats.smoothnessScore) / 2 + 6))),
-    coveragePct: balancedStats.coveragePct,
-    coverageStatus: balancedStats.coverageStatus,
-    color: '#f59e0b', // Amber
-    polyline: balancedPolyline,
-  };
-
-  return [safeRoute, fastRoute, balancedRoute];
+  return presets;
 }

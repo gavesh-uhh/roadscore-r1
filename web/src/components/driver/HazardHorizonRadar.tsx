@@ -108,8 +108,9 @@ export function HazardHorizonRadar({
 
       const speedCurrent = speedRef.current;
       const speedMps = speedCurrent / 3.6;
+      const laneDashPitch = 10;
       // Lane dashes scroll toward the viewer in sync with ground speed.
-      dashOffsetRef.current = (dashOffsetRef.current + speedMps * dt) % 12;
+      dashOffsetRef.current = (dashOffsetRef.current + speedMps * dt) % laneDashPitch;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
@@ -250,24 +251,51 @@ export function HazardHorizonRadar({
       }
 
       // =========================================================================
-      // 4. SPEED-SYNCHRONIZED CENTER LANE DASHES
+      // 4. SPEED-SYNCHRONIZED CENTER LANE DASHES (True 3D Perspective Tapering)
       // =========================================================================
 
-      ctx.lineCap = 'round';
-      const pitch = 12;
-      const dashLen = 3.2;
+      const pitch = laneDashPitch;
+      const dashLen = 3.8;
       const offset = dashOffsetRef.current;
+
       for (let d = -offset + pitch; d < maxRangeM; d += pitch) {
-        if (d < 1) continue;
-        const y1 = yAt(d);
-        const y2 = yAt(d + dashLen);
-        const p = persp(d);
-        ctx.lineWidth = Math.max(0.8, 4.8 * p);
-        ctx.strokeStyle = `rgba(240, 245, 255, ${0.25 + p * 0.35})`;
+        if (d < 0.2) continue;
+        const yBottom = yAt(d);
+        const yTop = yAt(d + dashLen);
+        if (yBottom <= horizonY) continue;
+
+        const pBottom = persp(d);
+        const pTop = persp(d + dashLen);
+
+        // Perspective widths: starts bold and wide at bottom (~10px), tapering to ~1px at horizon
+        const wBottom = Math.max(1.0, 9.6 * Math.pow(pBottom, 1.25));
+        const wTop = Math.max(0.6, 9.6 * Math.pow(pTop, 1.25));
+        const alpha = Math.min(0.95, 0.16 + pBottom * 0.78);
+
+        // Render each dash as a true perspective tapered trapezoid
         ctx.beginPath();
-        ctx.moveTo(cx, y1);
-        ctx.lineTo(cx, y2);
-        ctx.stroke();
+        ctx.moveTo(cx - wBottom / 2, yBottom);
+        ctx.lineTo(cx + wBottom / 2, yBottom);
+        ctx.lineTo(cx + wTop / 2, yTop);
+        ctx.lineTo(cx - wTop / 2, yTop);
+        ctx.closePath();
+
+        const dashGrad = ctx.createLinearGradient(0, yTop, 0, yBottom);
+        dashGrad.addColorStop(0, `rgba(215, 230, 255, ${alpha * 0.75})`);
+        dashGrad.addColorStop(1, `rgba(255, 255, 255, ${alpha})`);
+
+        ctx.fillStyle = dashGrad;
+        ctx.fill();
+
+        // Subtle soft neon bloom on foreground dashes close to the vehicle
+        if (pBottom > 0.45) {
+          ctx.save();
+          ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
+          ctx.shadowBlur = 8 * (pBottom - 0.45) * 1.8;
+          ctx.fillStyle = `rgba(255, 255, 255, ${0.25 * (pBottom - 0.45)})`;
+          ctx.fill();
+          ctx.restore();
+        }
       }
 
       // =========================================================================

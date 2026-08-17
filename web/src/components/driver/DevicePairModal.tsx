@@ -13,10 +13,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { QrCode, X, Video, VideoOff, Loader2 } from 'lucide-react';
+import { VehicleOrbSelector, type VehicleOrbUnit } from './VehicleOrbSelector';
 
 export interface DevicePairModalProps {
   open: boolean;
   currentDevice: string | null;
+  units?: VehicleOrbUnit[];
   onPair: (deviceId: string) => void;
   onClose: () => void;
 }
@@ -35,7 +37,13 @@ export function extractDeviceId(raw: string): string | null {
   return /^[\w:-]{3,64}$/.test(text) ? text : null;
 }
 
-export function DevicePairModal({ open, currentDevice, onPair, onClose }: DevicePairModalProps) {
+export function DevicePairModal({
+  open,
+  currentDevice,
+  units = [],
+  onPair,
+  onClose,
+}: DevicePairModalProps) {
   const [manualId, setManualId] = useState(currentDevice ?? '');
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
@@ -157,6 +165,19 @@ export function DevicePairModal({ open, currentDevice, onPair, onClose }: Device
                 <X size={14} />
               </button>
             </div>
+
+            {units && units.length > 0 && (
+              <div className="mb-4">
+                <VehicleOrbSelector
+                  units={units}
+                  selectedDeviceId={currentDevice}
+                  onSelect={(dId) => {
+                    onPair(dId);
+                    handleClose();
+                  }}
+                />
+              </div>
+            )}
 
             {scanning ? (
               <div className="relative overflow-hidden rounded-lg border border-zinc-800 bg-black aspect-square mb-3">

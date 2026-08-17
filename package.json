@@ -22,7 +22,8 @@
     "typecheck": "npm run typecheck --workspace=engine && npm run typecheck --workspace=sim",
     "sim:live": "npm run sim:live --workspace=engine",
     "sim:worst": "npm run sim:worst --workspace=engine",
-    "sim:live:worst": "npm run sim:live:worst --workspace=engine"
+    "sim:live:worst": "npm run sim:live:worst --workspace=engine",
+    "run_engine": "bash run_engine.sh"
   },
   "keywords": [
     "telematics",

@@ -198,17 +198,19 @@ function createMarkerIcon(m: MapMarker) {
 // Radar Pulse Icon for Instant Event Visualizer
 function createRadarPulseIcon(pulse: { severity?: string; type?: string }) {
   const isCritical = pulse.severity === 'critical';
-  const rippleColor = isCritical ? '#ef4444' : '#f59e0b';
-  const glowBg = isCritical ? 'rgba(239, 68, 68, 0.35)' : 'rgba(245, 158, 11, 0.35)';
+  const strokeColor = isCritical ? 'rgba(239, 68, 68, 0.4)' : 'rgba(245, 158, 11, 0.4)';
+  const strokeColorFast = isCritical ? 'rgba(239, 68, 68, 0.5)' : 'rgba(245, 158, 11, 0.5)';
+  const glowBg = isCritical ? 'rgba(239, 68, 68, 0.08)' : 'rgba(245, 158, 11, 0.08)';
+  const focalColor = isCritical ? '#ef4444' : '#f59e0b';
 
   const html = `
     <div style="position: relative; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; pointer-events: none;">
-      <!-- Outer expanding radar ring -->
-      <div class="animate-radar-pulse" style="position: absolute; width: 56px; height: 56px; border-radius: 9999px; border: 2px solid ${rippleColor}; background-color: ${glowBg};"></div>
-      <!-- Inner fast radar ring -->
-      <div class="animate-radar-pulse-fast" style="position: absolute; width: 36px; height: 36px; border-radius: 9999px; border: 1.5px solid ${rippleColor};"></div>
+      <!-- Outer expanding radar ring (reduced opacity) -->
+      <div class="animate-radar-pulse" style="position: absolute; width: 56px; height: 56px; border-radius: 9999px; border: 1px solid ${strokeColor}; background-color: ${glowBg};"></div>
+      <!-- Inner fast radar ring (reduced opacity) -->
+      <div class="animate-radar-pulse-fast" style="position: absolute; width: 36px; height: 36px; border-radius: 9999px; border: 1px solid ${strokeColorFast};"></div>
       <!-- Center glowing focal beacon -->
-      <div style="position: relative; width: 10px; height: 10px; border-radius: 9999px; background-color: ${rippleColor}; box-shadow: 0 0 10px ${rippleColor}; border: 1.5px solid #ffffff;"></div>
+      <div style="position: relative; width: 8px; height: 8px; border-radius: 9999px; background-color: ${focalColor}; box-shadow: 0 0 8px ${focalColor}; border: 1px solid rgba(255, 255, 255, 0.8);"></div>
     </div>
   `;
 

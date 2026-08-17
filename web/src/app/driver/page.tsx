@@ -27,6 +27,7 @@ import {
   Compass,
   Map as MapIcon,
   Radio,
+  Car,
 } from 'lucide-react';
 
 import { HazardHorizonRadar } from '@/components/driver/HazardHorizonRadar';
@@ -41,6 +42,7 @@ import { LaunchModal } from '@/components/driver/LaunchModal';
 import { DevicePairModal } from '@/components/driver/DevicePairModal';
 import { CrashEmergencyModal } from '@/components/driver/CrashEmergencyModal';
 import { type EventPulse } from '@/components/map/OSMMap';
+import { type VehicleOrbUnit } from '@/components/driver/VehicleOrbSelector';
 
 import { DemoSimulator, type CockpitSnapshot } from '@/lib/sim/demoSimulator';
 import { driverVoice } from '@/lib/audio/driverVoice';
@@ -52,6 +54,29 @@ import {
 } from '@/lib/realtime/useRealtimeStream';
 
 const LANE_PAN = { left: -0.7, center: 0, right: 0.7 } as const;
+
+const DRIVER_COLORS = ['#06b6d4', '#f59e0b', '#a855f7', '#10b981', '#ec4899', '#3b82f6'];
+
+const INITIAL_UNITS: VehicleOrbUnit[] = [
+  {
+    deviceId: 'ROADSCORE_001',
+    driverName: 'Gavesh Saparamadu',
+    vehiclePlate: 'WP CAB-4821 (Toyota Prius)',
+    color: '#06b6d4',
+  },
+  {
+    deviceId: 'DUMMY-001',
+    driverName: 'Timesh Dillon',
+    vehiclePlate: 'WP GA-9012 (Honda Civic)',
+    color: '#f59e0b',
+  },
+  {
+    deviceId: 'DUMMY-002',
+    driverName: 'Siluna De Silva',
+    vehiclePlate: 'WP KI-3341 (Nissan Leaf)',
+    color: '#a855f7',
+  },
+];
 
 let cardSeq = 0;
 
@@ -73,11 +98,58 @@ function DriverCockpit() {
   const [simOpen, setSimOpen] = useState(false);
   const [pairOpen, setPairOpen] = useState(false);
 
-  // URL auto-pairing (?device=rs-device-01)
+  // URL auto-pairing (?device=ROADSCORE_001), default firmly to ROADSCORE_001 to prevent cross-driver bouncing
   const deviceParam = searchParams.get('device');
-  const [pairedDevice, setPairedDevice] = useState<string | null>(null);
-  const deviceId = pairedDevice ?? deviceParam;
+  const [pairedDevice, setPairedDevice] = useState<string>(() => deviceParam || 'ROADSCORE_001');
+  const deviceId = pairedDevice;
   const [liveActive, setLiveActive] = useState(false);
+
+  // Vehicle Fleet Units & Live Telemetry Speeds for Orb Selector
+  const [vehicleUnits, setVehicleUnits] = useState<VehicleOrbUnit[]>(INITIAL_UNITS);
+  const [liveDeviceSpeeds, setLiveDeviceSpeeds] = useState<Record<string, { speedKmh: number; lastSeen: number }>>({});
+
+  useEffect(() => {
+    async function loadDrivers() {
+      try {
+        const { data: drivers } = await supabase
+          .from('drivers')
+          .select('driver_id, full_name, assigned_vehicle, assigned_device_id');
+        if (drivers && drivers.length > 0) {
+          const mapped: VehicleOrbUnit[] = drivers
+            .filter((d: any) => d.assigned_device_id)
+            .map((d: any, idx: number) => ({
+              deviceId: d.assigned_device_id,
+              driverName: d.full_name,
+              vehiclePlate: d.assigned_vehicle || 'Fleet Vehicle',
+              color: DRIVER_COLORS[idx % DRIVER_COLORS.length],
+            }));
+          if (mapped.length > 0) {
+            setVehicleUnits(mapped);
+          }
+        }
+      } catch {
+        // Fallback to initial units
+      }
+    }
+    loadDrivers();
+  }, [supabase]);
+
+  // Compute live active state and speed for each orb
+  const dynamicUnits: VehicleOrbUnit[] = useMemo(() => {
+    return vehicleUnits.map((u) => {
+      const live = liveDeviceSpeeds[u.deviceId];
+      const isLiveRecent = live && Date.now() - live.lastSeen < 4000;
+      return {
+        ...u,
+        speedKmh: isLiveRecent ? live.speedKmh : undefined,
+        isLive: !!isLiveRecent,
+      };
+    });
+  }, [vehicleUnits, liveDeviceSpeeds]);
+
+  const activeUnit = useMemo(() => {
+    return dynamicUnits.find((u) => u.deviceId === deviceId) || dynamicUnits[0];
+  }, [dynamicUnits, deviceId]);
 
   // Severe Crash & 911 SOS State
   const [crashOpen, setCrashOpen] = useState(false);
@@ -265,7 +337,6 @@ function DriverCockpit() {
   // ---- Dual-Stream: Fastify SSE Live Telemetry + Simulation Fallback ----
   const handleTelemetry = useCallback(
     (t: TelemetryPacket) => {
-      if (deviceId && t.device_id !== deviceId) return;
       const rawGps = t.gps as Record<string, unknown> | null | undefined;
       const rawRecord = t as Record<string, unknown>;
       const speedKmh =
@@ -275,7 +346,19 @@ function DriverCockpit() {
             ? (rawRecord.speed_kmh as number)
             : typeof rawRecord.speed === 'number'
               ? (rawRecord.speed as number)
-              : undefined;
+              : 0;
+
+      // Update live status for this device in our fleet map
+      if (t.device_id) {
+        setLiveDeviceSpeeds((prev) => ({
+          ...prev,
+          [t.device_id]: { speedKmh, lastSeen: Date.now() },
+        }));
+      }
+
+      // STRICT ISOLATION: Reject telemetry from any other vehicle to prevent bouncing
+      const targetId = deviceId || 'ROADSCORE_001';
+      if (t.device_id !== targetId) return;
 
       if (speedKmh == null && !rawGps) return;
 
@@ -308,7 +391,8 @@ function DriverCockpit() {
 
   const handleDrivingEvent = useCallback(
     (e: DrivingEventPacket) => {
-      if (deviceId && e.device_id !== deviceId) return;
+      const targetId = deviceId || 'ROADSCORE_001';
+      if (e.device_id && e.device_id !== targetId) return;
       simRef.current?.ingestLiveDrivingEvent({
         type: e.type,
         magnitude: e.magnitude,
@@ -519,19 +603,30 @@ function DriverCockpit() {
             <FlaskConical size={14} />
           </button>
 
-          {/* Unit Pair */}
+          {/* Active Vehicle Orb Selector in Top Bar */}
           <button
             onClick={() => setPairOpen(true)}
-            className={`hidden min-[480px]:flex h-8 items-center gap-1 rounded-full px-2.5 text-[9px] font-mono font-bold transition-all ${
-              isLive
-                ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/40'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-            title="Pair Vehicle Unit"
-            aria-label="Pair Vehicle Unit"
+            className="flex items-center gap-2 rounded-full border border-zinc-800 bg-black/80 py-1 px-3 backdrop-blur-xl shadow-xl shadow-black/80 hover:border-emerald-500/50 hover:bg-zinc-900 transition-all cursor-pointer"
+            title="Click to switch vehicle / hardware unit"
           >
-            <Radio size={11} className={isLive ? 'text-emerald-400' : 'text-zinc-500'} />
-            <span>{deviceId ? deviceId.slice(-6) : feedLabel}</span>
+            <div
+              className="w-5 h-5 rounded-full flex items-center justify-center border shadow-sm"
+              style={{
+                backgroundColor: `${activeUnit?.color || '#10b981'}33`,
+                borderColor: activeUnit?.color || '#10b981',
+              }}
+            >
+              <Car size={11} style={{ color: activeUnit?.color || '#10b981' }} />
+            </div>
+            <div className="flex flex-col text-left">
+              <span className="text-[10px] font-mono font-bold text-white leading-tight">
+                {activeUnit?.deviceId || deviceId || 'ROADSCORE_001'}
+              </span>
+              <span className="text-[8px] text-zinc-400 leading-none truncate max-w-[90px]">
+                {activeUnit?.driverName || 'Driver'}
+              </span>
+            </div>
+            <Radio size={10} className={isLive ? 'text-emerald-400 animate-pulse ml-0.5' : 'text-zinc-600 ml-0.5'} />
           </button>
         </div>
       </div>
@@ -673,6 +768,7 @@ function DriverCockpit() {
       <DevicePairModal
         open={pairOpen}
         currentDevice={deviceId}
+        units={dynamicUnits}
         onPair={handlePair}
         onClose={() => setPairOpen(false)}
       />
@@ -682,6 +778,8 @@ function DriverCockpit() {
         open={!launched}
         deviceId={deviceId}
         feedLabel={feedLabel}
+        units={dynamicUnits}
+        onSelectDevice={(id) => setPairedDevice(id)}
         onLaunch={handleLaunch}
       />
     </div>

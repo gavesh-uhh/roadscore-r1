@@ -10,15 +10,25 @@
 
 import { motion, AnimatePresence } from 'framer-motion';
 import { ShieldCheck, Volume2, Mic2, Smartphone, Radio, ChevronRight } from 'lucide-react';
+import { VehicleOrbSelector, type VehicleOrbUnit } from './VehicleOrbSelector';
 
 export interface LaunchModalProps {
   open: boolean;
   deviceId: string | null;
   feedLabel: string;
+  units?: VehicleOrbUnit[];
+  onSelectDevice?: (deviceId: string) => void;
   onLaunch: () => void;
 }
 
-export function LaunchModal({ open, deviceId, feedLabel, onLaunch }: LaunchModalProps) {
+export function LaunchModal({
+  open,
+  deviceId,
+  feedLabel,
+  units = [],
+  onSelectDevice,
+  onLaunch,
+}: LaunchModalProps) {
   return (
     <AnimatePresence>
       {open && (
@@ -26,15 +36,15 @@ export function LaunchModal({ open, deviceId, feedLabel, onLaunch }: LaunchModal
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/98 backdrop-blur-2xl px-4"
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/98 backdrop-blur-2xl px-4 overflow-y-auto py-6"
         >
           <motion.div
             initial={{ scale: 0.94, y: 12 }}
             animate={{ scale: 1, y: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 26 }}
-            className="w-full max-w-xs sm:max-w-sm rounded-3xl border border-zinc-800/80 bg-zinc-950/90 p-5 sm:p-6 text-center shadow-2xl shadow-black"
+            className="w-full max-w-md sm:max-w-lg rounded-3xl border border-zinc-800/80 bg-zinc-950/90 p-5 sm:p-6 text-center shadow-2xl shadow-black my-auto"
           >
-            <div className="relative mx-auto mb-3.5 flex h-12 w-12 items-center justify-center">
+            <div className="relative mx-auto mb-3 flex h-12 w-12 items-center justify-center">
               <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-500/20 animate-live-ping" />
               <span className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500/15 border border-emerald-500/40">
                 <ShieldCheck size={22} className="text-emerald-400" />
@@ -45,8 +55,19 @@ export function LaunchModal({ open, deviceId, feedLabel, onLaunch }: LaunchModal
               RoadScore Co-Pilot
             </h1>
             <p className="mt-0.5 text-[10.5px] text-zinc-400">
-              TrueScore™ Shield is armed and ready to defend your driving record.
+              Select your vehicle hardware to link the active in-cabin telemetry stream.
             </p>
+
+            {/* ===== VEHICLE ORBS WITH CARS INSIDE ===== */}
+            {units.length > 0 && onSelectDevice && (
+              <div className="my-4">
+                <VehicleOrbSelector
+                  units={units}
+                  selectedDeviceId={deviceId}
+                  onSelect={onSelectDevice}
+                />
+              </div>
+            )}
 
             <div className="mt-3 flex items-center justify-center gap-1.5 text-[8.5px] font-mono font-bold">
               <span className="px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-950/40 text-emerald-300 flex items-center gap-1">
@@ -61,7 +82,7 @@ export function LaunchModal({ open, deviceId, feedLabel, onLaunch }: LaunchModal
 
             <button
               onClick={onLaunch}
-              className="group mt-5 w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3 px-4 text-xs font-black uppercase tracking-wider text-black shadow-[0_0_25px_rgba(16,185,129,0.5)] hover:bg-emerald-400 active:scale-[0.98] transition-all"
+              className="group mt-5 w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3 px-4 text-xs font-black uppercase tracking-wider text-black shadow-[0_0_25px_rgba(16,185,129,0.5)] hover:bg-emerald-400 active:scale-[0.98] transition-all cursor-pointer"
             >
               <span>Launch Co-Pilot</span>
               <ChevronRight size={15} className="transition-transform group-hover:translate-x-0.5" />

@@ -26,64 +26,61 @@ export function LaunchModal({ open, deviceId, feedLabel, onLaunch }: LaunchModal
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/95 backdrop-blur-md px-6"
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/98 backdrop-blur-2xl px-4"
         >
           <motion.div
-            initial={{ scale: 0.92, y: 16 }}
+            initial={{ scale: 0.94, y: 12 }}
             animate={{ scale: 1, y: 0 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 24 }}
-            className="w-full max-w-sm text-center"
+            transition={{ type: 'spring', stiffness: 300, damping: 26 }}
+            className="w-full max-w-xs sm:max-w-sm rounded-3xl border border-zinc-800/80 bg-zinc-950/90 p-5 sm:p-6 text-center shadow-2xl shadow-black"
           >
-            <div className="relative mx-auto mb-5 flex h-16 w-16 items-center justify-center">
+            <div className="relative mx-auto mb-3.5 flex h-12 w-12 items-center justify-center">
               <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-500/20 animate-live-ping" />
-              <span className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 border border-emerald-500/40">
-                <ShieldCheck size={28} className="text-emerald-400" />
+              <span className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500/15 border border-emerald-500/40">
+                <ShieldCheck size={22} className="text-emerald-400" />
               </span>
             </div>
 
-            <h1 className="text-xl font-extrabold tracking-tight text-white">
+            <h1 className="text-lg font-black tracking-tight text-white">
               RoadScore Co-Pilot
             </h1>
-            <p className="mt-1 text-[11px] text-zinc-400">
+            <p className="mt-0.5 text-[10.5px] text-zinc-400">
               TrueScore™ Shield is armed and ready to defend your driving record.
             </p>
 
-            <div className="mt-4 flex items-center justify-center gap-2 text-[9px] font-semibold">
-              <span className="px-2 py-1 rounded-full border border-zinc-800 bg-zinc-950 text-zinc-300 flex items-center gap-1">
-                <Radio size={10} className="text-emerald-400" />
+            <div className="mt-3 flex items-center justify-center gap-1.5 text-[8.5px] font-mono font-bold">
+              <span className="px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-950/40 text-emerald-300 flex items-center gap-1">
+                <Radio size={9} className="text-emerald-400" />
                 {feedLabel}
               </span>
-              <span className="px-2 py-1 rounded-full border border-zinc-800 bg-zinc-950 text-zinc-300 flex items-center gap-1">
-                <Smartphone size={10} className="text-zinc-400" />
+              <span className="px-2 py-0.5 rounded-full border border-zinc-800 bg-zinc-900/80 text-zinc-300 flex items-center gap-1">
+                <Smartphone size={9} className="text-zinc-400" />
                 {deviceId ?? 'Demo Unit'}
               </span>
             </div>
 
             <button
               onClick={onLaunch}
-              className="group mt-6 w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-500 py-4 text-sm font-extrabold uppercase tracking-widest text-black shadow-[0_0_40px_-8px_rgba(16,185,129,0.7)] hover:bg-emerald-400 active:scale-[0.98]"
+              className="group mt-5 w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3 px-4 text-xs font-black uppercase tracking-wider text-black shadow-[0_0_25px_rgba(16,185,129,0.5)] hover:bg-emerald-400 active:scale-[0.98] transition-all"
             >
-              Launch Co-Pilot
-              <ChevronRight size={16} className="transition-transform group-hover:translate-x-0.5" />
+              <span>Launch Co-Pilot</span>
+              <ChevronRight size={15} className="transition-transform group-hover:translate-x-0.5" />
             </button>
 
-            <div className="mt-5 grid grid-cols-3 gap-2 text-[8.5px] text-zinc-500">
-              <div className="flex flex-col items-center gap-1">
-                <Volume2 size={13} className="text-zinc-400" />
-                Acoustic Chimes
+            <div className="mt-4 grid grid-cols-3 gap-1.5 text-[8px] text-zinc-500">
+              <div className="flex flex-col items-center gap-0.5">
+                <Volume2 size={12} className="text-zinc-400" />
+                Chimes
               </div>
-              <div className="flex flex-col items-center gap-1">
-                <Mic2 size={13} className="text-zinc-400" />
-                Voice Alerts
+              <div className="flex flex-col items-center gap-0.5">
+                <Mic2 size={12} className="text-zinc-400" />
+                Voice
               </div>
-              <div className="flex flex-col items-center gap-1">
-                <Smartphone size={13} className="text-zinc-400" />
-                Screen Wake Lock
+              <div className="flex flex-col items-center gap-0.5">
+                <Smartphone size={12} className="text-zinc-400" />
+                Wake Lock
               </div>
             </div>
-            <p className="mt-3 text-[9px] text-zinc-600">
-              One tap enables audio, voice guidance and keeps the screen awake.
-            </p>
           </motion.div>
         </motion.div>
       )}

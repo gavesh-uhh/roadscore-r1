@@ -118,7 +118,7 @@ export function TripMap({
       />
 
       {/* Minimal Driver Spatial Overlay (Heading & Trip Distance - Anchored Top-Left) */}
-      <div className="pointer-events-none absolute left-3 top-3 z-[500] flex items-center gap-2">
+      <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-2">
         <div className="flex items-center gap-1.5 rounded-full border border-zinc-800/80 bg-black/80 px-3 py-1.5 text-[10px] font-mono font-bold text-zinc-200 backdrop-blur-md shadow-lg shadow-black/80">
           <Compass size={12} className="text-sky-400" />
           <span>

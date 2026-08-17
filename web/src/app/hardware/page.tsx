@@ -156,9 +156,14 @@ export default function HardwareFleetRegistry() {
   const boundUnitsCount = devices.filter((d) => d.vehicle_id).length;
 
   const fleetMarkers: MapMarker[] = useMemo(() => {
+    const DRIVER_PALETTE = [
+      '#38bdf8', '#f59e0b', '#a855f7', '#10b981', '#f43f5e',
+      '#06b6d4', '#84cc16', '#ec4899', '#6366f1', '#eab308',
+    ];
+
     return devices
       .filter((d) => deviceLocations[d.device_id])
-      .map((d) => {
+      .map((d, idx) => {
         const loc = deviceLocations[d.device_id];
         return {
           id: d.device_id,
@@ -166,6 +171,7 @@ export default function HardwareFleetRegistry() {
           lon: loc.lon,
           title: `Device ${d.device_id}`,
           type: 'vehicle' as const,
+          color: DRIVER_PALETTE[idx % DRIVER_PALETTE.length],
           heading: loc.heading,
           speedKmh: loc.speed_kmh,
           details: `Device: ${d.device_id} | Vehicle: ${d.vehicle_plate || d.vehicle_id || 'Unassigned'} | Speed: ${loc.speed_kmh.toFixed(1)} km/h | Sats: ${loc.sats}`,

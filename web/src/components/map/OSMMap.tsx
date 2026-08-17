@@ -20,6 +20,7 @@ export interface MapMarker {
   eventType?: string;
   h3_12?: string;
   category?: string;
+  color?: string;
 }
 
 export interface MapPolyline {

@@ -115,6 +115,7 @@ export default function UnifiedOperationsDesk() {
 
   // Selection & Map Focus State
   const [mapCenter, setMapCenter] = useState<[number, number]>([6.915, 79.852]);
+  const [mapZoom, setMapZoom] = useState<number>(13);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<EventRow | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
@@ -406,6 +407,30 @@ export default function UnifiedOperationsDesk() {
     };
   }, [loadDatabaseData]);
 
+  // Distinct, high-contrast curated color palette for fleet drivers and vehicles
+  const DRIVER_PALETTE = [
+    '#38bdf8', // Sky Blue (Driver 1 - ROADSCORE_001)
+    '#f59e0b', // Amber (Driver 2 - DUMMY-001)
+    '#a855f7', // Purple (Driver 3 - DUMMY-002)
+    '#10b981', // Emerald (Driver 4 - DUMMY-003)
+    '#f43f5e', // Rose (Driver 5 - DUMMY-004)
+    '#06b6d4', // Cyan (Driver 6 - DUMMY-005)
+    '#84cc16', // Lime (Driver 7 - DUMMY-006)
+    '#ec4899', // Pink (Driver 8 - DUMMY-007)
+    '#6366f1', // Indigo (Driver 9 - DUMMY-008)
+    '#eab308', // Gold (Driver 10 - DUMMY-009)
+  ];
+
+  // Helper map for fast driver color lookup by device ID or driver ID
+  const driverColorMap = new Map<string, string>();
+  drivers.forEach((d, idx) => {
+    const color = DRIVER_PALETTE[idx % DRIVER_PALETTE.length]!;
+    driverColorMap.set(d.driver_id, color);
+    if (d.assigned_device_id) {
+      driverColorMap.set(d.assigned_device_id, color);
+    }
+  });
+
   // Construct Map Markers directly from DB records
   const mapMarkers: MapMarker[] = [];
 
@@ -418,6 +443,12 @@ export default function UnifiedOperationsDesk() {
   }
 
   devicePositions.forEach((t, devId) => {
+    const matchedDriver = drivers.find((d) => d.assigned_device_id === devId);
+    const driverIdx = matchedDriver ? drivers.indexOf(matchedDriver) : -1;
+    const color =
+      driverColorMap.get(devId) ||
+      (driverIdx >= 0 ? DRIVER_PALETTE[driverIdx % DRIVER_PALETTE.length] : DRIVER_PALETTE[mapMarkers.length % DRIVER_PALETTE.length]);
+
     mapMarkers.push({
       id: `dev-${devId}`,
       type: 'vehicle',
@@ -425,10 +456,13 @@ export default function UnifiedOperationsDesk() {
       lon: t.gps!.lon,
       heading: t.gps!.heading ?? 0,
       speedKmh: t.gps!.speed_kmh ?? 0,
-      title: `Vehicle / Device: ${devId}`,
+      title: matchedDriver ? `${matchedDriver.full_name} (${devId})` : `Vehicle: ${devId}`,
       deviceId: devId,
+      color,
       occurredAt: t.server_received_at || t.ts,
-      details: `Active Telemetry Stream | Received: ${t.server_received_at}`,
+      details: matchedDriver
+        ? `Driver: ${matchedDriver.full_name} | Vehicle: ${matchedDriver.assigned_vehicle} | Speed: ${t.gps!.speed_kmh?.toFixed(1) ?? '0'} km/h`
+        : `Active Telemetry Stream | Received: ${t.server_received_at}`,
     });
   });
 
@@ -712,31 +746,73 @@ export default function UnifiedOperationsDesk() {
               drivers.map((driver, idx) => {
                 const isSelected = selectedDriverId === driver.driver_id;
                 const driverKey = driver.driver_id ? `driver-${driver.driver_id}-${idx}` : `driver-${idx}`;
+                const driverColor =
+                  driverColorMap.get(driver.driver_id) ||
+                  (driver.assigned_device_id ? driverColorMap.get(driver.assigned_device_id) : undefined) ||
+                  DRIVER_PALETTE[idx % DRIVER_PALETTE.length]!;
+
+                const handleFocusDriver = () => {
+                  setSelectedDriverId(driver.driver_id);
+                  const devId = driver.assigned_device_id;
+                  const pos = devId ? devicePositions.get(devId) : null;
+                  if (pos?.gps?.lat && pos?.gps?.lon) {
+                    setMapCenter([pos.gps.lat, pos.gps.lon]);
+                    setMapZoom(16);
+                  } else {
+                    setMapCenter([6.915, 79.852]);
+                    setMapZoom(15);
+                  }
+                };
 
                 return (
                   <div
                     key={driverKey}
+                    title="Click to select | Double-click to focus marker on map"
                     onClick={() => {
+                      const isCurrentlySelected = selectedDriverId === driver.driver_id;
                       setSelectedDriverId((prev) => (prev === driver.driver_id ? null : driver.driver_id));
-                      setMapCenter([6.915, 79.852]);
+                      if (!isCurrentlySelected) {
+                        const devId = driver.assigned_device_id;
+                        const pos = devId ? devicePositions.get(devId) : null;
+                        if (pos?.gps?.lat && pos?.gps?.lon) {
+                          setMapCenter([pos.gps.lat, pos.gps.lon]);
+                        }
+                      }
                     }}
-                    className={`p-2 rounded-md cursor-pointer transition-colors flex items-center justify-between border ${
+                    onDoubleClick={(e) => {
+                      e.preventDefault();
+                      handleFocusDriver();
+                    }}
+                    className={`p-2 rounded-md cursor-pointer transition-all flex items-center justify-between border select-none group ${
                       isSelected
-                        ? 'bg-zinc-900 border-zinc-700 text-white'
-                        : 'bg-zinc-950 border-zinc-800/40 hover:bg-zinc-900/50 text-zinc-400'
+                        ? 'bg-zinc-900 border-zinc-700 text-white shadow-sm'
+                        : 'bg-zinc-950 border-zinc-800/40 hover:bg-zinc-900/50 hover:border-zinc-700/60 text-zinc-400'
                     }`}
                   >
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <p className="font-medium text-white text-xs">{driver.full_name}</p>
-                        {driver.has_active_trip && (
-                          <span className="inline-flex items-center gap-1 px-1 py-0.2 rounded-xs bg-emerald-950/90 border border-emerald-700/60 text-emerald-400 text-[9px] font-mono font-bold tracking-tight">
-                            <span className="w-1 h-1 rounded-full bg-emerald-400 animate-live-ping" />
-                            TRIP
-                          </span>
-                        )}
+                    <div className="flex items-center gap-2 min-w-0">
+                      {/* Driver Unique Color Indicator Badge */}
+                      <div
+                        className="w-2.5 h-2.5 rounded-full shrink-0 border transition-transform group-hover:scale-125"
+                        style={{
+                          backgroundColor: driverColor,
+                          borderColor: '#ffffff',
+                          borderWidth: '1px',
+                          boxShadow: `0 0 8px ${driverColor}aa`,
+                        }}
+                        title={`Driver Map Marker Color: ${driverColor}`}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-medium text-white text-xs truncate">{driver.full_name}</p>
+                          {driver.has_active_trip && (
+                            <span className="inline-flex items-center gap-1 px-1 py-0.2 rounded-xs bg-emerald-950/90 border border-emerald-700/60 text-emerald-400 text-[9px] font-mono font-bold tracking-tight shrink-0">
+                              <span className="w-1 h-1 rounded-full bg-emerald-400 animate-live-ping" />
+                              TRIP
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-zinc-500 font-mono truncate">{driver.assigned_vehicle}</p>
                       </div>
-                      <p className="text-[10px] text-zinc-500 font-mono">{driver.assigned_vehicle}</p>
                     </div>
                     <span
                       onClick={(e) => {
@@ -744,7 +820,7 @@ export default function UnifiedOperationsDesk() {
                         setAuditDriver(driver);
                       }}
                       title="Click to view itemized score deduction audit"
-                      className={`px-1.5 py-0.5 rounded-sm text-[10px] font-mono font-bold cursor-pointer transition-transform hover:scale-105 ${
+                      className={`px-1.5 py-0.5 rounded-sm text-[10px] font-mono font-bold cursor-pointer transition-transform hover:scale-105 shrink-0 ${
                         driver.safety_score >= 90
                           ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
                           : driver.safety_score >= 75
@@ -859,7 +935,7 @@ export default function UnifiedOperationsDesk() {
           <div className="flex-1 relative">
             <OSMMap
               center={mapCenter}
-              zoom={13}
+              zoom={mapZoom}
               markers={mapMarkers}
               hexagons={mapHexagons}
               eventPulses={activePulses}

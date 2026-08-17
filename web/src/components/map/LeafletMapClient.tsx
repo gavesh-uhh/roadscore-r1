@@ -92,12 +92,16 @@ function MapViewPreserver({
     const hasExplicitZoomPropChange = prevZoomPropRef.current !== mapZoom;
 
     if (hasMeaningfulCenterChange) {
-      // Pan to new coordinate while PRESERVING user's current zoom level
-      map.panTo(mapCenter, { animate: true });
+      // Smoothly fly to target driver coordinate
+      map.flyTo(mapCenter, hasExplicitZoomPropChange ? mapZoom : map.getZoom(), {
+        duration: 0.9,
+        easeLinearity: 0.25,
+      });
       prevCenterRef.current = [mapCenter[0], mapCenter[1]];
-    }
-
-    if (hasExplicitZoomPropChange) {
+      if (hasExplicitZoomPropChange) {
+        prevZoomPropRef.current = mapZoom;
+      }
+    } else if (hasExplicitZoomPropChange) {
       map.setZoom(mapZoom);
       prevZoomPropRef.current = mapZoom;
     }
@@ -152,37 +156,42 @@ function createMarkerIcon(m: MapMarker) {
     });
   }
 
-  let color = '#ffffff';
-  if (m.type === 'event') {
-    if (m.severity === 'critical') color = '#ef4444';
-    else if (m.severity === 'high') color = '#f97316';
-    else if (m.severity === 'medium') color = '#f59e0b';
-    else color = '#3b82f6';
-  } else if (m.type === 'defect') {
-    color = '#eab308';
-  } else if (m.type === 'vehicle') {
-    color = '#10b981';
+  let color = m.color || '#ffffff';
+  if (!m.color) {
+    if (m.type === 'event') {
+      if (m.severity === 'critical') color = '#ef4444';
+      else if (m.severity === 'high') color = '#f97316';
+      else if (m.severity === 'medium') color = '#f59e0b';
+      else color = '#3b82f6';
+    } else if (m.type === 'defect') {
+      color = '#eab308';
+    } else if (m.type === 'vehicle') {
+      color = '#10b981';
+    }
   }
 
   const headingAngle = m.heading ?? 0;
 
   const svgIcon = `
-    <div style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="28" height="28" style="filter: drop-shadow(0px 2px 5px rgba(0,0,0,0.9)); transform: rotate(${headingAngle}deg); transform-origin: 50% 50%; transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);">
-        ${
-          m.type === 'vehicle'
-            ? `<path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>`
-            : `<circle cx="12" cy="12" r="9" stroke="#ffffff" stroke-width="2"/>`
-        }
-      </svg>
+    <div style="display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; position: relative;">
+      ${
+        m.type === 'vehicle'
+          ? `
+          <div style="position: absolute; width: 32px; height: 32px; border-radius: 9999px; background: ${color}22; border: 1.5px solid ${color}88; box-shadow: 0 0 10px ${color}88;"></div>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="26" height="26" style="filter: drop-shadow(0px 2px 5px rgba(0,0,0,0.9)); transform: rotate(${headingAngle}deg); transform-origin: 50% 50%; transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); position: relative; z-index: 2;">
+            <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" stroke="#ffffff" stroke-width="1.2" stroke-linejoin="round"/>
+          </svg>
+          `
+          : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="28" height="28" style="filter: drop-shadow(0px 2px 5px rgba(0,0,0,0.9));"><circle cx="12" cy="12" r="9" stroke="#ffffff" stroke-width="2"/></svg>`
+      }
     </div>
   `;
 
   return L.divIcon({
     className: 'custom-leaflet-icon',
     html: svgIcon,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
   });
 }
 

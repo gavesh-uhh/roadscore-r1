@@ -220,9 +220,13 @@ export class SimulatorTuiApp {
 
     if (key.name === 'a') {
       const nextNum = drivers.length + 1;
+      const defaultVehicleId =
+        nextNum === 1
+          ? 'ROADSCORE_001'
+          : `DUMMY-${String(nextNum - 1).padStart(3, '0')}`;
       this.addDriverForm = {
         driverId: `driver-${String(nextNum).padStart(2, '0')}`,
-        vehicleId: `ROADSCORE_${String(nextNum).padStart(3, '0')}`,
+        vehicleId: defaultVehicleId,
         originIndex: (nextNum - 1) % SRI_LANKA_PLACES.length,
         destIndex: (nextNum + 5) % SRI_LANKA_PLACES.length,
         speedProfileIndex: 0,

@@ -134,7 +134,7 @@ export async function fetchOsrmRoutes(
 
     const res = await fetch(url, { signal: AbortSignal.timeout(4500) });
     if (!res.ok) return [];
-    const data = await res.json();
+    const data = (await res.json()) as { routes?: any[] };
     if (!data.routes || !Array.isArray(data.routes) || data.routes.length === 0) {
       return [];
     }
@@ -166,6 +166,8 @@ export function extractRouteH3Cells(polyline: [number, number][], stepMeters: nu
   for (let i = 0; i < polyline.length - 1; i++) {
     const p1 = polyline[i];
     const p2 = polyline[i + 1];
+    if (!p1 || !p2) continue;
+
     const segmentDist = haversineMeters(p1[0], p1[1], p2[0], p2[1]);
     const steps = Math.max(1, Math.ceil(segmentDist / stepMeters));
 
@@ -184,11 +186,13 @@ export function extractRouteH3Cells(polyline: [number, number][], stepMeters: nu
 
   // Ensure final point is indexed
   const last = polyline[polyline.length - 1];
-  try {
-    const lastCell = latLngToCell(last[0], last[1], 12);
-    if (lastCell) cellSet.add(lastCell);
-  } catch {
-    // ignore
+  if (last) {
+    try {
+      const lastCell = latLngToCell(last[0], last[1], 12);
+      if (lastCell) cellSet.add(lastCell);
+    } catch {
+      // ignore
+    }
   }
 
   return Array.from(cellSet);
@@ -380,7 +384,7 @@ export async function calculateThreePresets(
     // Alternative street corridor waypoint 1
     const wp1: [number, number] = [midLat - (dLon / len) * 0.008, midLon + (dLat / len) * 0.008];
     const altRoutes1 = await fetchOsrmRoutes(start[0], start[1], end[0], end[1], wp1);
-    if (altRoutes1.length > 0) {
+    if (altRoutes1[0]) {
       candidateRoutes.push(altRoutes1[0]);
     }
 
@@ -388,7 +392,7 @@ export async function calculateThreePresets(
     if (candidateRoutes.length < 3) {
       const wp2: [number, number] = [midLat + (dLon / len) * 0.006, midLon - (dLat / len) * 0.006];
       const altRoutes2 = await fetchOsrmRoutes(start[0], start[1], end[0], end[1], wp2);
-      if (altRoutes2.length > 0) {
+      if (altRoutes2[0]) {
         candidateRoutes.push(altRoutes2[0]);
       }
     }
@@ -427,12 +431,15 @@ export async function calculateThreePresets(
     };
   });
 
+  if (evaluatedCandidates.length === 0) return [];
+
   // Rank routes based on genuine evidence:
   // - Fast Route: Shortest transit duration from OSRM
   // - Safe Route: Highest verified smoothness / lowest roughness & potholes
   // - Balanced Route: Moderate trade-off
   const sortedByTime = [...evaluatedCandidates].sort((a, b) => a.durationMins - b.durationMins);
-  const fastCandidate = sortedByTime[0];
+  const fastCandidate = sortedByTime[0] ?? evaluatedCandidates[0];
+  if (!fastCandidate) return [];
 
   const sortedBySafety = [...evaluatedCandidates].sort((a, b) => {
     const scoreA = a.evaluation.smoothnessScore ?? -1;
@@ -441,11 +448,11 @@ export async function calculateThreePresets(
     return (a.evaluation.potholesHit ?? 999) - (b.evaluation.potholesHit ?? 999);
   });
 
-  const safeCandidate = sortedBySafety[0] || fastCandidate;
+  const safeCandidate = sortedBySafety[0] ?? fastCandidate;
   const remainingCandidates = evaluatedCandidates.filter(
     (c) => c !== fastCandidate && c !== safeCandidate
   );
-  const balancedCandidate = remainingCandidates[0] || evaluatedCandidates[1] || fastCandidate;
+  const balancedCandidate = remainingCandidates[0] ?? evaluatedCandidates[1] ?? fastCandidate;
 
   // Build RoutePreset objects with 100% genuine data
   const fastPreset: RoutePreset = {

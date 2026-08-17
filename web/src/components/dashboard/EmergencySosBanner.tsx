@@ -46,12 +46,12 @@ export function EmergencySosBanner() {
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ y: -20, x: '-50%', opacity: 0 }}
-        animate={{ y: 0, x: '-50%', opacity: 1 }}
-        exit={{ y: -20, x: '-50%', opacity: 0 }}
-        className="fixed top-3 left-1/2 -translate-x-1/2 z-[99999] w-full max-w-4xl px-3 pointer-events-auto"
+        initial={{ y: -20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: -20, opacity: 0 }}
+        className="fixed top-3 inset-x-0 z-[99999] flex justify-center px-3 pointer-events-none"
       >
-        <div className="flex items-center justify-between gap-2 rounded-2xl border border-rose-500/70 bg-rose-950/95 px-3 py-1.5 sm:py-2 text-white shadow-2xl shadow-rose-950/80 backdrop-blur-xl">
+        <div className="w-full max-w-4xl pointer-events-auto flex items-center justify-between gap-2 rounded-2xl border border-rose-500/70 bg-rose-950/95 px-3 py-1.5 sm:py-2 text-white shadow-2xl shadow-rose-950/80 backdrop-blur-xl">
           {/* Pulsing indicator & Title */}
           <div className="flex items-center gap-2 min-w-0">
             <span className="relative flex h-2.5 w-2.5 shrink-0">

@@ -27,8 +27,8 @@ describe('RoadScore-R1 — Routing & Road Intelligence Invariants', () => {
     expect(uniqueCells.size).toBe(cells.length);
 
     // First and last points should match
-    const firstExpected = latLngToCell(polyline[0][0], polyline[0][1], 12);
-    const lastExpected = latLngToCell(polyline[2][0], polyline[2][1], 12);
+    const firstExpected = latLngToCell(polyline[0]![0], polyline[0]![1], 12);
+    const lastExpected = latLngToCell(polyline[2]![0], polyline[2]![1], 12);
     expect(cells).toContain(firstExpected);
     expect(cells).toContain(lastExpected);
   });

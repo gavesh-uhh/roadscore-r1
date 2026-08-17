@@ -699,17 +699,23 @@ export default function UnifiedOperationsDesk() {
 
           {/* Dual-Feed Active Mode Badge */}
           {feedMode === 'sse' ? (
-            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/80 text-emerald-300 font-mono text-[11px] font-bold shadow-[0_0_10px_rgba(16,185,129,0.25)]">
+            <div
+              title="Fast direct stream from engine (<10ms latency)"
+              className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/80 text-emerald-300 font-mono text-[11px] font-bold shadow-[0_0_10px_rgba(16,185,129,0.25)]"
+            >
               <Zap size={12} className="text-emerald-400 fill-emerald-400 animate-pulse" />
-              <span>FAST-PATH ACTIVE (SSE)</span>
+              <span>FAST STREAM (SSE)</span>
               {latencyMs !== null && (
                 <span className="text-[10px] text-emerald-400/80 font-normal ml-0.5">(&lt;10ms)</span>
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-amber-950/70 border border-amber-600/70 text-amber-300 font-mono text-[11px] font-bold shadow-[0_0_10px_rgba(245,158,11,0.2)]">
+            <div
+              title="Standard fallback via cloud database sync"
+              className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-amber-950/70 border border-amber-600/70 text-amber-300 font-mono text-[11px] font-bold shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+            >
               <Database size={12} className="text-amber-400" />
-              <span>CLOUD CDC ACTIVE</span>
+              <span>SLOW STREAM (Cloud CDC)</span>
               <span className="text-[10px] text-amber-400/80 font-normal ml-0.5">(Supabase)</span>
             </div>
           )}

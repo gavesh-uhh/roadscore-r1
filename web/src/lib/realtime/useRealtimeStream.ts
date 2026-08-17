@@ -43,7 +43,7 @@ export interface RealtimeStreamState {
   feedMode: FeedMode;
   isSseActive: boolean;
   isCdcActive: boolean;
-  statusBadgeText: 'FAST-PATH ACTIVE (SSE)' | 'CLOUD CDC ACTIVE';
+  statusBadgeText: 'FAST STREAM (SSE)' | 'SLOW STREAM (Cloud CDC)';
   latencyMs: number | null;
   totalPackets: number;
   lastPacketTimestamp: number | null;
@@ -370,7 +370,7 @@ export function useRealtimeStream({
     };
   }, [enabled, supabase, recordPacketArrival]);
 
-  const statusBadgeText = feedMode === 'sse' ? 'FAST-PATH ACTIVE (SSE)' : 'CLOUD CDC ACTIVE';
+  const statusBadgeText = feedMode === 'sse' ? 'FAST STREAM (SSE)' : 'SLOW STREAM (Cloud CDC)';
 
   return {
     feedMode,

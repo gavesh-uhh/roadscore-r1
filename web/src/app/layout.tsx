@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { Sidebar } from '@/components/common/Sidebar';
+import { EmergencySosBanner } from '@/components/dashboard/EmergencySosBanner';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -23,6 +24,7 @@ export default function RootLayout({
       <body className="bg-black text-white antialiased min-h-screen flex font-sans">
         <Sidebar />
         <main className="flex-1 flex flex-col min-w-0 min-h-screen bg-black">
+          <EmergencySosBanner />
           {children}
         </main>
       </body>

@@ -102,6 +102,7 @@ export type SimEvent =
   | { type: 'deduction'; title: string; message: string; points: number }
   | { type: 'eco-tip'; title: string; message: string }
   | { type: 'harsh-maneuver'; g: GForces; label: string }
+  | { type: 'severe-crash'; lat: number; lon: number; speedKmh: number; impactG: number }
   | { type: 'trip-started'; startedAt: number }
   | { type: 'trip-ended'; stats: TripState };
 
@@ -400,6 +401,27 @@ export class DemoSimulator {
     // but the exoneration decision itself is deterministic here (§3.1):
     // harsh maneuver within the 3 s hazard window → attributedToDriver: false.
     setTimeout(() => this.arbitrateHarshManeuver('Harsh braking'), 450);
+  }
+
+  /**
+   * Severe Collision Crash & Automated 911 SOS trigger.
+   * Simulates high-G impact (-6.8g), instant velocity drop to 0, and eCall event.
+   */
+  triggerSevereCrash(): void {
+    const prevSpeed = this.speedKmh || 62;
+    this.speedKmh = 0;
+    this.targetSpeedKmh = 0;
+    this.impulseALong = -6.8;
+    this.impulseALat = 3.2;
+    this.g = { aLong: -6.8, aLat: 3.2 };
+
+    this.emit({
+      type: 'severe-crash',
+      lat: this.position.lat,
+      lon: this.position.lon,
+      speedKmh: prevSpeed,
+      impactG: 6.8,
+    });
   }
 
   // ---------------------------------------------------------------------

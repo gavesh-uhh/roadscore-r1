@@ -39,6 +39,7 @@ import { TrueScoreCards, type AssistCard } from '@/components/driver/TrueScoreCa
 import { SimulationStudioDrawer } from '@/components/driver/SimulationStudioDrawer';
 import { LaunchModal } from '@/components/driver/LaunchModal';
 import { DevicePairModal } from '@/components/driver/DevicePairModal';
+import { CrashEmergencyModal } from '@/components/driver/CrashEmergencyModal';
 import { type EventPulse } from '@/components/map/OSMMap';
 
 import { DemoSimulator, type CockpitSnapshot } from '@/lib/sim/demoSimulator';
@@ -77,6 +78,15 @@ function DriverCockpit() {
   const [pairedDevice, setPairedDevice] = useState<string | null>(null);
   const deviceId = pairedDevice ?? deviceParam;
   const [liveActive, setLiveActive] = useState(false);
+
+  // Severe Crash & 911 SOS State
+  const [crashOpen, setCrashOpen] = useState(false);
+  const [crashData, setCrashData] = useState<{ lat: number; lon: number; speedKmh: number; impactG: number }>({
+    lat: 6.9271,
+    lon: 79.8612,
+    speedKmh: 62,
+    impactG: 6.8,
+  });
 
   const simRef = useRef<DemoSimulator | null>(null);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
@@ -214,6 +224,17 @@ function DriverCockpit() {
           break;
         }
         case 'harsh-maneuver': {
+          break;
+        }
+        case 'severe-crash': {
+          setCrashData({
+            lat: e.lat,
+            lon: e.lon,
+            speedKmh: e.speedKmh,
+            impactG: e.impactG,
+          });
+          setCrashOpen(true);
+          triggerHaptic([300, 100, 300, 100, 500]);
           break;
         }
         case 'trip-started': {
@@ -626,6 +647,7 @@ function DriverCockpit() {
         onTriggerWaterPooling={() => simRef.current?.triggerWaterPooling(120)}
         onSlamBrakes={() => simRef.current?.slamBrakesAndExonerate()}
         onTriggerEcoGlide={() => simRef.current?.triggerEcoGlide()}
+        onTriggerSevereCrash={() => simRef.current?.triggerSevereCrash()}
         hudMode={hudMode}
         onToggleHud={toggleHud}
         liveActive={isLive}
@@ -633,6 +655,18 @@ function DriverCockpit() {
         onToggleAutoDrive={() => simRef.current?.toggleAutoDrive()}
         hapticsOn={hapticsOn}
         onToggleHaptics={() => setHapticsOn((h) => !h)}
+      />
+
+      {/* ===== Severe Crash & 911 Emergency Modal ========================= */}
+      <CrashEmergencyModal
+        open={crashOpen}
+        lat={crashData.lat}
+        lon={crashData.lon}
+        speedBeforeImpactKmh={crashData.speedKmh}
+        impactG={crashData.impactG}
+        deviceId={deviceId || 'RS-DEV-DEMO'}
+        tripId={snap?.trip?.startedAt ? `trip-${snap.trip.startedAt}` : null}
+        onClose={() => setCrashOpen(false)}
       />
 
       {/* ===== Hardware Pairing Modal ===================================== */}

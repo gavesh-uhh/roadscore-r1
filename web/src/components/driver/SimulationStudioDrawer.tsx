@@ -29,6 +29,7 @@ import {
   Play,
   Square,
   Vibrate,
+  AlertOctagon,
 } from 'lucide-react';
 
 export interface SimulationStudioDrawerProps {
@@ -42,6 +43,7 @@ export interface SimulationStudioDrawerProps {
   onTriggerWaterPooling: () => void;
   onSlamBrakes: () => void;
   onTriggerEcoGlide: () => void;
+  onTriggerSevereCrash: () => void;
   hudMode: boolean;
   onToggleHud: () => void;
   liveActive: boolean;
@@ -250,6 +252,13 @@ export function SimulationStudioDrawer(props: SimulationStudioDrawerProps) {
                     sub="Coast-to-queue coaching"
                     onClick={fireAndClose(props.onTriggerEcoGlide)}
                     accent=""
+                  />
+                  <TriggerButton
+                    icon={<AlertOctagon size={15} className="text-rose-400 animate-pulse" />}
+                    label="Crash & 911 SOS"
+                    sub="Impact → eCall countdown"
+                    onClick={fireAndClose(props.onTriggerSevereCrash)}
+                    accent="border-rose-800/60 bg-rose-950/40 hover:border-rose-500 text-rose-300"
                   />
                 </div>
 

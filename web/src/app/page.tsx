@@ -537,14 +537,34 @@ export default function UnifiedOperationsDesk() {
     return list;
   }, [roadCells]);
 
-  // Active device telemetry for Live Cockpit Digital Twin
-  const activeDeviceTel = useMemo(() => {
-    if (activeDriver?.assigned_device_id) {
-      const match = telemetry.find((t) => t.device_id === activeDriver.assigned_device_id);
+  // Active cockpit driver (selected driver, or first driver by default)
+  const currentCockpitDriver = useMemo(() => {
+    if (selectedDriverId) {
+      const match = drivers.find((d) => d.driver_id === selectedDriverId);
       if (match) return match;
     }
-    return telemetry[0] || null;
-  }, [activeDriver, telemetry]);
+    return drivers[0] || null;
+  }, [selectedDriverId, drivers]);
+
+  // Cockpit driver items for the in-HUD switcher dropdown
+  const cockpitDriverList = useMemo(() => {
+    return drivers.map((d, idx) => ({
+      id: d.driver_id,
+      name: d.full_name,
+      vehicle: d.assigned_vehicle,
+      deviceId: d.assigned_device_id,
+      color: driverColorMap.get(d.driver_id) || DRIVER_PALETTE[idx % DRIVER_PALETTE.length],
+    }));
+  }, [drivers, driverColorMap, DRIVER_PALETTE]);
+
+  // Active device telemetry strictly for the chosen cockpit driver
+  const activeDeviceTel = useMemo(() => {
+    if (currentCockpitDriver?.assigned_device_id) {
+      const match = telemetry.find((t) => t.device_id === currentCockpitDriver.assigned_device_id);
+      if (match) return match;
+    }
+    return null;
+  }, [currentCockpitDriver, telemetry]);
 
   const activeSpeed = activeDeviceTel?.gps?.speed_kmh != null ? Number(activeDeviceTel.gps.speed_kmh) : 0;
   const activeHeading = activeDeviceTel?.gps?.heading != null ? Number(activeDeviceTel.gps.heading) : 0;
@@ -963,8 +983,23 @@ export default function UnifiedOperationsDesk() {
                     radarBlips={cockpitRadarBlips}
                     advisorySpeedKmh={cockpitAdvisorySpeed}
                     isLive={true}
-                    vehicleName={activeDriver?.assigned_device_id || 'ROADSCORE_FLEET_01'}
-                    driverName={activeDriver?.full_name}
+                    vehicleName={currentCockpitDriver?.assigned_vehicle || currentCockpitDriver?.assigned_device_id || 'Fleet Vehicle'}
+                    driverName={currentCockpitDriver?.full_name}
+                    driverColor={
+                      currentCockpitDriver
+                        ? driverColorMap.get(currentCockpitDriver.driver_id) || DRIVER_PALETTE[0]
+                        : undefined
+                    }
+                    driverList={cockpitDriverList}
+                    selectedDriverId={currentCockpitDriver?.driver_id || null}
+                    onSelectDriver={(dId) => {
+                      setSelectedDriverId(dId);
+                      const d = drivers.find((drv) => drv.driver_id === dId);
+                      const pos = d?.assigned_device_id ? devicePositions.get(d.assigned_device_id) : null;
+                      if (pos?.gps?.lat && pos?.gps?.lon) {
+                        setMapCenter([pos.gps.lat, pos.gps.lon]);
+                      }
+                    }}
                     compact={true}
                     timestamp={new Date().toLocaleTimeString()}
                   />

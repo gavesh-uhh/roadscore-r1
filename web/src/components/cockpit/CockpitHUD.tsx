@@ -31,6 +31,14 @@ export interface CockpitAlert {
   advisorySpeedKmh?: number;
 }
 
+export interface CockpitDriverItem {
+  id: string;
+  name: string;
+  vehicle: string;
+  deviceId?: string | null;
+  color?: string;
+}
+
 export interface CockpitHUDProps {
   speedKmh?: number;
   advisorySpeedKmh?: number | null;
@@ -42,6 +50,10 @@ export interface CockpitHUDProps {
   timestamp?: string;
   vehicleName?: string;
   driverName?: string;
+  driverColor?: string;
+  driverList?: CockpitDriverItem[];
+  selectedDriverId?: string | null;
+  onSelectDriver?: (driverId: string) => void;
   compact?: boolean;
   className?: string;
 }
@@ -57,6 +69,10 @@ export function CockpitHUD({
   timestamp,
   vehicleName,
   driverName,
+  driverColor,
+  driverList = [],
+  selectedDriverId,
+  onSelectDriver,
   compact = false,
   className = '',
 }: CockpitHUDProps) {
@@ -151,7 +167,7 @@ export function CockpitHUD({
       {/* Top Cockpit Telemetry Bar */}
       <div className="flex items-center justify-between border-b border-zinc-900 pb-2.5 mb-3 text-xs">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 shrink-0">
             <span
               className={`w-2 h-2 rounded-full ${
                 isLive ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'
@@ -161,10 +177,41 @@ export function CockpitHUD({
               {isLive ? 'LIVE COCKPIT HUD' : 'TRIP REPLAY HUD'}
             </span>
           </div>
-          {(vehicleName || driverName) && (
-            <span className="text-zinc-500 text-[10px] truncate">
-              {vehicleName} {driverName ? `• ${driverName}` : ''}
-            </span>
+
+          {driverList.length > 1 && onSelectDriver ? (
+            <div className="flex items-center gap-1.5 ml-1 min-w-0">
+              {driverColor && (
+                <span
+                  className="w-2 h-2 rounded-full shrink-0 border border-white/60"
+                  style={{ backgroundColor: driverColor, boxShadow: `0 0 6px ${driverColor}aa` }}
+                />
+              )}
+              <select
+                value={selectedDriverId || ''}
+                onChange={(e) => onSelectDriver(e.target.value)}
+                className="bg-zinc-900 border border-zinc-700/80 rounded px-1.5 py-0.5 text-[10px] text-zinc-200 focus:outline-none focus:border-emerald-500 cursor-pointer max-w-[180px] truncate"
+                title="Select which driver cockpit to view"
+              >
+                {driverList.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} ({d.deviceId || d.vehicle})
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            (vehicleName || driverName) && (
+              <span className="text-zinc-400 text-[10px] truncate flex items-center gap-1.5">
+                {driverColor && (
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0 border border-white/60"
+                    style={{ backgroundColor: driverColor, boxShadow: `0 0 6px ${driverColor}aa` }}
+                  />
+                )}
+                <strong className="text-white font-medium">{driverName || 'Driver'}</strong>
+                <span className="text-zinc-500 font-mono">({vehicleName})</span>
+              </span>
+            )
           )}
         </div>
 

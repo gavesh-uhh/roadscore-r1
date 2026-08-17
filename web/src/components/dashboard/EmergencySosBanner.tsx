@@ -4,10 +4,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   AlertOctagon,
-  MapPin,
   ExternalLink,
-  CheckCircle,
-  Radio,
+  X,
   Ambulance,
 } from 'lucide-react';
 import type { EmergencyDispatchRecord } from '@/app/api/emergency/dispatch/route';
@@ -49,76 +47,56 @@ export function EmergencySosBanner() {
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ height: 0, opacity: 0 }}
-        animate={{ height: 'auto', opacity: 1 }}
-        exit={{ height: 0, opacity: 0 }}
-        className="relative z-50 bg-rose-950 border-b-2 border-rose-500 shadow-2xl shadow-rose-950/80 px-4 py-3 text-white overflow-hidden"
+        initial={{ y: -20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: -20, opacity: 0 }}
+        className="sticky top-2 z-50 px-2 sm:px-4 py-1"
       >
-        <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-rose-600/20 via-transparent to-transparent animate-pulse" />
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-2 rounded-2xl border border-rose-500/70 bg-rose-950/95 px-3 py-1.5 sm:py-2 text-white shadow-xl shadow-rose-950/60 backdrop-blur-xl">
+          {/* Pulsing indicator & Title */}
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="relative flex h-2.5 w-2.5 shrink-0">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75 animate-ping" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500" />
+            </span>
 
-        <div className="mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-3 max-w-7xl relative z-10">
-          {/* Emergency Title & Status */}
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-600 text-white shadow-lg shadow-rose-600/50 animate-bounce">
-              <AlertOctagon size={22} />
-            </div>
-
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500" />
-                </span>
-                <span className="text-xs font-mono font-black uppercase tracking-widest text-rose-300">
-                  CRITICAL INCIDENT · AUTOMATED eCALL 911 SOS
-                </span>
-              </div>
-              <h2 className="text-sm sm:text-base font-extrabold text-white tracking-tight">
-                Severe Collision Detected on Vehicle{' '}
-                <span className="font-mono text-rose-300 underline">{current.deviceId}</span>
-              </h2>
-            </div>
-          </div>
-
-          {/* Telemetry Chips & GPS */}
-          <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-            <div className="flex items-center gap-1.5 rounded-lg bg-black/40 border border-rose-500/40 px-2.5 py-1.5 text-rose-200">
-              <MapPin size={13} className="text-rose-400" />
-              <span>
-                {current.lat.toFixed(5)}, {current.lon.toFixed(5)}
+            <div className="flex items-center gap-1.5 truncate text-[11px] sm:text-xs font-mono">
+              <span className="font-black text-rose-300 shrink-0 uppercase tracking-wider">
+                🚨 SOS Crash
+              </span>
+              <span className="text-zinc-500 hidden sm:inline">·</span>
+              <span className="font-bold text-white truncate">{current.deviceId}</span>
+              <span className="text-zinc-500 hidden sm:inline">·</span>
+              <span className="text-rose-200/80 hidden sm:inline text-[10px]">
+                {current.lat.toFixed(4)}, {current.lon.toFixed(4)} ({current.impactG.toFixed(1)}g)
               </span>
             </div>
-
-            <div className="rounded-lg bg-black/40 border border-rose-500/40 px-2.5 py-1.5 text-rose-200">
-              <span>Impact: {current.impactG.toFixed(1)}g</span> ·{' '}
-              <span>{Math.round(current.speedBeforeImpactKmh)} km/h</span>
-            </div>
-
-            <div className="flex items-center gap-1 rounded-lg bg-emerald-950/80 border border-emerald-500/60 px-2.5 py-1.5 text-emerald-300 font-bold">
-              <Ambulance size={13} />
-              <span>{current.emsUnit ?? 'EMS Dispatched'}</span>
-              {current.etaMinutes && <span>(~{current.etaMinutes}m ETA)</span>}
-            </div>
           </div>
 
-          {/* Actions */}
-          <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-end">
+          {/* Quick Actions */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <div className="hidden min-[480px]:flex items-center gap-1 rounded-md bg-emerald-950/80 border border-emerald-500/50 px-2 py-0.5 text-[9.5px] font-mono text-emerald-300">
+              <Ambulance size={11} />
+              <span>{current.emsUnit ?? 'EMS Dispatched'}</span>
+            </div>
+
             <a
               href={current.liveMapUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 text-xs font-mono font-bold transition-all shadow-md shadow-rose-900/50"
+              className="flex items-center gap-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white px-2.5 py-1 text-[10px] font-mono font-bold transition-all"
             >
-              <span>Live Map</span>
-              <ExternalLink size={12} />
+              <span>Map</span>
+              <ExternalLink size={10} />
             </a>
 
             <button
               onClick={() => resolveEmergency(current.id)}
-              className="flex items-center gap-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white px-3 py-1.5 text-xs font-mono font-bold transition-all"
+              className="p-1 rounded-md text-rose-300 hover:text-white hover:bg-rose-900/60 active:scale-95 transition-all"
+              title="Resolve Incident"
+              aria-label="Resolve Incident"
             >
-              <CheckCircle size={13} className="text-zinc-400" />
-              <span>Resolve</span>
+              <X size={14} />
             </button>
           </div>
         </div>

@@ -241,12 +241,19 @@ const VehicleDeadReckoningMarker = memo(function VehicleDeadReckoningMarker({
     baseTime: typeof performance !== 'undefined' ? performance.now() : Date.now(),
   });
 
+  // Check if telemetry packet is actively fresh (<3s old). If stale or simulation paused/stopped, zero out movement.
+  const isStalePacket = marker.occurredAt
+    ? Date.now() - new Date(marker.occurredAt).getTime() > 3000
+    : false;
+
+  const effectiveSpeedKmh = isStalePacket ? 0 : (marker.speedKmh ?? 0);
+
   // When a new packet arrives with updated coordinate, speed, or heading:
   useEffect(() => {
     anchorRef.current = {
       baseLat: marker.lat,
       baseLon: marker.lon,
-      speedKmh: marker.speedKmh ?? 0,
+      speedKmh: effectiveSpeedKmh,
       heading: marker.heading ?? 0,
       baseTime: performance.now(),
     };
@@ -255,7 +262,7 @@ const VehicleDeadReckoningMarker = memo(function VehicleDeadReckoningMarker({
       markerRef.current.setIcon(createMarkerIcon(marker));
       markerRef.current.setLatLng([marker.lat, marker.lon]);
     }
-  }, [marker.lat, marker.lon, marker.speedKmh, marker.heading, marker]);
+  }, [marker.lat, marker.lon, effectiveSpeedKmh, marker.heading, marker]);
 
   // 60 FPS Dead-Reckoning Extrapolation Loop
   useEffect(() => {
@@ -265,18 +272,20 @@ const VehicleDeadReckoningMarker = memo(function VehicleDeadReckoningMarker({
       const now = performance.now();
       const { baseLat, baseLon, speedKmh, heading, baseTime } = anchorRef.current;
 
+      // Only extrapolate if actively moving and packet is within 3.0s liveness window
       if (speedKmh > 0 && markerRef.current) {
         const elapsedSec = (now - baseTime) / 1000;
-        // Clamp extrapolation to maximum 2.0 seconds to prevent drift
-        const clampedDt = Math.min(Math.max(elapsedSec, 0), 2.0);
 
-        if (clampedDt > 0) {
+        // If elapsed time exceeds 2.5s since last packet, vehicle has stopped or paused
+        if (elapsedSec > 2.5) {
+          markerRef.current.setLatLng([baseLat, baseLon]);
+        } else {
+          const clampedDt = Math.min(Math.max(elapsedSec, 0), 2.5);
           const speedMps = speedKmh / 3.6;
           const distanceM = speedMps * clampedDt;
           const headingRad = (heading * Math.PI) / 180;
 
           // Spatial displacement approximation (WGS84 spherical model)
-          // 1 deg lat ~= 111,139 meters
           const dLat = (distanceM * Math.cos(headingRad)) / 111139;
           const cosLat = Math.cos((baseLat * Math.PI) / 180);
           const dLon =
@@ -288,6 +297,8 @@ const VehicleDeadReckoningMarker = memo(function VehicleDeadReckoningMarker({
 
           markerRef.current.setLatLng([currentLat, currentLon]);
         }
+      } else if (markerRef.current) {
+        markerRef.current.setLatLng([baseLat, baseLon]);
       }
 
       animId = requestAnimationFrame(loop);

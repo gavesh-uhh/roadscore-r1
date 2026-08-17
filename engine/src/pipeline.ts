@@ -272,13 +272,14 @@ export class Pipeline {
 
     for (const e of finalEvents) {
       const p = this.persistable(e, st);
-      sink.enqueueEvent(p);
       if (st.trip !== null) {
+        sink.enqueueTrip(st.trip);
         st.tripEvents.push(p);
         if (e.type === 'integrity.calibration_stale') {
           st.calibrationStaleCount++;
         }
       }
+      sink.enqueueEvent(p);
       this.stats.eventsEmitted++;
       this.broadcast({ type: 'event', data: p });
     }

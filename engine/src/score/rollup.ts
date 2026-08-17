@@ -61,12 +61,16 @@ export function scoreTrip(input: TripScoreInput, cfg: Thresholds, ruleVersion: s
   const { trip } = input;
   const lc = tripIsLowConfidence(trip, cfg, input.calibrationStaleEvents ?? 0);
 
+  const pStart = trip.startedAt;
+  const rawEnd = trip.endedAt ?? trip.startedAt;
+  const pEnd = rawEnd <= pStart ? pStart + Math.max(1, Math.round(trip.durationS ?? 1)) : rawEnd;
+
   const score = computeScore(
     {
       subjectType: 'trip',
       subjectId: trip.id,
-      periodStart: trip.startedAt,
-      periodEnd: trip.endedAt ?? trip.startedAt,
+      periodStart: pStart,
+      periodEnd: pEnd,
       events: input.events,
       distanceKm: trip.distanceM / 1000,
       durationMin: trip.durationS === null ? undefined : trip.durationS / 60,

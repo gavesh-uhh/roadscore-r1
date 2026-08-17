@@ -407,17 +407,22 @@ export class PgSink implements Sink {
     }
     const dedupedScores = Array.from(scoreMap.values());
 
-    const rows = dedupedScores.map((s) => ({
-      subject_type: s.subjectType,
-      subject_id: s.subjectId,
-      period_start: ts(s.periodStart),
-      period_end: ts(s.periodEnd),
-      score: s.score,
-      exposure_km: s.exposureKm,
-      exposure_min: s.exposureMin,
-      breakdown: JSON.stringify(s.breakdown),
-      rule_version: s.ruleVersion,
-    }));
+    const rows = dedupedScores.map((s) => {
+      const pStart = s.periodStart;
+      // Guarantee period_end > period_start to satisfy postgres check constraint scores_period_ordered
+      const pEnd = s.periodEnd <= pStart ? pStart + 1 : s.periodEnd;
+      return {
+        subject_type: s.subjectType,
+        subject_id: s.subjectId,
+        period_start: ts(pStart),
+        period_end: ts(pEnd),
+        score: s.score,
+        exposure_km: s.exposureKm,
+        exposure_min: s.exposureMin,
+        breakdown: JSON.stringify(s.breakdown),
+        rule_version: s.ruleVersion,
+      };
+    });
 
     // The §4 unique key includes `rule_version`, so re-scoring under new
     // thresholds produces a comparable row instead of destroying the old verdict.

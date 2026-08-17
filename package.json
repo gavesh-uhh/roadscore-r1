@@ -23,6 +23,7 @@
     "sim:live": "npm run sim:live --workspace=engine",
     "sim:worst": "npm run sim:worst --workspace=engine",
     "sim:live:worst": "npm run sim:live:worst --workspace=engine",
+    "deploy:vps": "bash scripts/vps-deploy.sh",
     "run_engine": "bash run_engine.sh"
   },
   "keywords": [

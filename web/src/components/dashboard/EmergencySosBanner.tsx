@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  AlertOctagon,
   ExternalLink,
   X,
   Ambulance,
@@ -11,6 +11,7 @@ import {
 import type { EmergencyDispatchRecord } from '@/app/api/emergency/dispatch/route';
 
 export function EmergencySosBanner() {
+  const pathname = usePathname();
   const [emergencies, setEmergencies] = useState<EmergencyDispatchRecord[]>([]);
 
   const fetchEmergencies = useCallback(async () => {
@@ -21,7 +22,7 @@ export function EmergencySosBanner() {
         setEmergencies(data.activeEmergencies);
       }
     } catch {
-      // Ignore network hiccup
+      // Ignore network error
     }
   }, []);
 
@@ -40,19 +41,20 @@ export function EmergencySosBanner() {
     return () => clearInterval(interval);
   }, [fetchEmergencies]);
 
-  if (emergencies.length === 0) return null;
+  // Hide the fleet ops banner on the dedicated driver cockpit (driver already has CrashEmergencyModal takeover)
+  if (pathname === '/driver' || emergencies.length === 0) return null;
 
   const current = emergencies[0];
 
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ y: -20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: -20, opacity: 0 }}
-        className="sticky top-2 z-50 px-2 sm:px-4 py-1"
+        initial={{ y: -20, x: '-50%', opacity: 0 }}
+        animate={{ y: 0, x: '-50%', opacity: 1 }}
+        exit={{ y: -20, x: '-50%', opacity: 0 }}
+        className="fixed top-3 left-1/2 -translate-x-1/2 z-[9990] w-full max-w-4xl px-3 pointer-events-auto"
       >
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-2 rounded-2xl border border-rose-500/70 bg-rose-950/95 px-3 py-1.5 sm:py-2 text-white shadow-xl shadow-rose-950/60 backdrop-blur-xl">
+        <div className="flex items-center justify-between gap-2 rounded-2xl border border-rose-500/70 bg-rose-950/95 px-3 py-1.5 sm:py-2 text-white shadow-2xl shadow-rose-950/80 backdrop-blur-xl">
           {/* Pulsing indicator & Title */}
           <div className="flex items-center gap-2 min-w-0">
             <span className="relative flex h-2.5 w-2.5 shrink-0">
@@ -84,7 +86,7 @@ export function EmergencySosBanner() {
               href={current.liveMapUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white px-2.5 py-1 text-[10px] font-mono font-bold transition-all"
+              className="flex items-center gap-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white px-2.5 py-1 text-[10px] font-mono font-bold transition-all shadow-md shadow-rose-900/50"
             >
               <span>Map</span>
               <ExternalLink size={10} />

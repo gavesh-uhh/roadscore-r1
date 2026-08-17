@@ -44,7 +44,8 @@ import { CrashEmergencyModal } from '@/components/driver/CrashEmergencyModal';
 import { type EventPulse } from '@/components/map/OSMMap';
 import { type VehicleOrbUnit } from '@/components/driver/VehicleOrbSelector';
 
-import { DemoSimulator, type CockpitSnapshot } from '@/lib/sim/demoSimulator';
+import { DemoSimulator, type CockpitSnapshot, type KnownRoadDefect } from '@/lib/sim/demoSimulator';
+import { cellToLatLng } from 'h3-js';
 import { driverVoice } from '@/lib/audio/driverVoice';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -160,10 +161,90 @@ function DriverCockpit() {
     impactG: 6.8,
   });
 
+  const [knownDefects, setKnownDefects] = useState<KnownRoadDefect[]>([]);
   const simRef = useRef<DemoSimulator | null>(null);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const cardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveFeedUntilRef = useRef(0);
+
+  // ---- Query Active Road Defects from Supabase ----
+  const loadRoadDefects = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('road_defects')
+        .select('*')
+        .eq('status', 'active')
+        .limit(200);
+
+      if (data && !error) {
+        const mapped: KnownRoadDefect[] = data
+          .map((d: any) => {
+            let lat = d.lat != null ? Number(d.lat) : undefined;
+            let lon = d.lon != null ? Number(d.lon) : undefined;
+            if ((lat == null || lon == null) && d.h3_12) {
+              try {
+                const coords = cellToLatLng(d.h3_12);
+                lat = coords[0];
+                lon = coords[1];
+              } catch {
+                // ignore
+              }
+            }
+            return {
+              id: String(d.id),
+              lat: lat ?? 0,
+              lon: lon ?? 0,
+              severity: (d.severity as any) || 'high',
+              h3_12: d.h3_12 ? String(d.h3_12) : undefined,
+              status: d.status,
+            };
+          })
+          .filter((d) => d.lat !== 0 && d.lon !== 0);
+
+        setKnownDefects(mapped);
+        simRef.current?.setKnownDefects(mapped);
+      }
+    } catch (err) {
+      console.warn('Error loading road defects in cockpit:', err);
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    loadRoadDefects();
+  }, [loadRoadDefects]);
+
+  // ---- Dynamic Regulatory Speed Limit Lookup (OpenStreetMap / Overpass) ----
+  const lastSpeedLimitQueryRef = useRef<{ lat: number; lon: number; at: number }>({ lat: 0, lon: 0, at: 0 });
+  const [currentRoadName, setCurrentRoadName] = useState<string>('');
+
+  const checkSpeedLimit = useCallback(async (lat: number, lon: number) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return;
+    const now = Date.now();
+    const last = lastSpeedLimitQueryRef.current;
+
+    // Spatial & Temporal debounce: moved > 45m and at least 3.5s elapsed
+    const dLat = Math.abs(lat - last.lat);
+    const dLon = Math.abs(lon - last.lon);
+    if (dLat < 0.0004 && dLon < 0.0004 && now - last.at < 3500) return;
+    if (now - last.at < 3000) return;
+
+    lastSpeedLimitQueryRef.current = { lat, lon, at: now };
+
+    try {
+      const resp = await fetch(`/api/speed-limit?lat=${lat}&lon=${lon}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (typeof data.speedLimitKmh === 'number' && data.speedLimitKmh > 0) {
+          simRef.current?.setSpeedLimit(data.speedLimitKmh, data.roadName);
+        }
+        if (data.roadName) {
+          setCurrentRoadName(data.roadName);
+        }
+      }
+    } catch {
+      // Best effort lookup
+    }
+  }, []);
 
   // ---- Vibration Helper --------------------------------------------------
   const triggerHaptic = useCallback(
@@ -218,16 +299,37 @@ function DriverCockpit() {
     const unsubSnap = sim.subscribe((snap) => {
       setSnapshot(snap);
 
+      // Dynamic regulatory speed limit lookup from OSM/Overpass
+      if (
+        snap?.position &&
+        Number.isFinite(snap.position.lat) &&
+        Number.isFinite(snap.position.lon)
+      ) {
+        checkSpeedLimit(snap.position.lat, snap.position.lon);
+      }
+
       // Track breadcrumbs for map trail
-      if (snap.position) {
+      if (
+        snap?.position &&
+        Number.isFinite(snap.position.lat) &&
+        Number.isFinite(snap.position.lon)
+      ) {
         setBreadcrumbs((prev) => {
+          const lat = snap.position.lat;
+          const lon = snap.position.lon;
           const last = prev[prev.length - 1];
-          if (!last) return [[snap.position.lat, snap.position.lon]];
-          const dLat = Math.abs(last[0] - snap.position.lat);
-          const dLon = Math.abs(last[1] - snap.position.lon);
+          if (!last) return [[lat, lon]];
+          const dLat = Math.abs(last[0] - lat);
+          const dLon = Math.abs(last[1] - lon);
+
+          // If sudden jump > 0.004 deg (~400m), reset trail so zero-origin diagonal line is never drawn
+          if (dLat > 0.004 || dLon > 0.004) {
+            return [[lat, lon]];
+          }
+
           // Only append when moved at least ~3 meters
           if (dLat > 0.00003 || dLon > 0.00003) {
-            return [...prev.slice(-500), [snap.position.lat, snap.position.lon]];
+            return [...prev.slice(-500), [lat, lon]];
           }
           return prev;
         });
@@ -254,6 +356,21 @@ function DriverCockpit() {
           break;
         }
         case 'hazard-passed': {
+          break;
+        }
+        case 'speed-reduction-ahead': {
+          driverVoice.announce(
+            `Reduced speed zone. ${e.newLimit} km/h ahead. Please slow down.`,
+            2,
+            { chime: 'eco' },
+          );
+          triggerHaptic([60, 40, 60]);
+          pushCard(
+            'eco',
+            `Reduced Speed Zone: ${e.newLimit} km/h`,
+            `Speed limit drops from ${e.prevLimit} to ${e.newLimit} km/h${e.roadName ? ' on ' + e.roadName : ''}. Coast smoothly to preserve score.`,
+            6000,
+          );
           break;
         }
         case 'exoneration': {
@@ -362,19 +479,25 @@ function DriverCockpit() {
 
       if (speedKmh == null && !rawGps) return;
 
-      const effectiveSpeed = speedKmh ?? 0;
+      const effectiveSpeed = typeof speedKmh === 'number' && Number.isFinite(speedKmh) ? speedKmh : 0;
       const rawAccel = t.accel_cal as Record<string, unknown> | null | undefined;
-      const aLong = typeof rawAccel?.a_long === 'number' ? rawAccel.a_long : undefined;
-      const aLat = typeof rawAccel?.a_lat === 'number' ? rawAccel.a_lat : undefined;
+      const aLong =
+        typeof rawAccel?.a_long === 'number' && Number.isFinite(rawAccel.a_long)
+          ? (rawAccel.a_long as number)
+          : undefined;
+      const aLat =
+        typeof rawAccel?.a_lat === 'number' && Number.isFinite(rawAccel.a_lat)
+          ? (rawAccel.a_lat as number)
+          : undefined;
       const lat =
-        (typeof rawGps?.lat === 'number' ? (rawGps.lat as number) : undefined) ??
-        (typeof rawRecord.lat === 'number' ? (rawRecord.lat as number) : undefined);
+        (typeof rawGps?.lat === 'number' && Number.isFinite(rawGps.lat) ? (rawGps.lat as number) : undefined) ??
+        (typeof rawRecord?.lat === 'number' && Number.isFinite(rawRecord.lat) ? (rawRecord.lat as number) : undefined);
       const lon =
-        (typeof rawGps?.lon === 'number' ? (rawGps.lon as number) : undefined) ??
-        (typeof rawRecord.lon === 'number' ? (rawRecord.lon as number) : undefined);
+        (typeof rawGps?.lon === 'number' && Number.isFinite(rawGps.lon) ? (rawGps.lon as number) : undefined) ??
+        (typeof rawRecord?.lon === 'number' && Number.isFinite(rawRecord.lon) ? (rawRecord.lon as number) : undefined);
       const headingDeg =
-        (typeof rawGps?.heading === 'number' ? (rawGps.heading as number) : undefined) ??
-        (typeof rawRecord.heading === 'number' ? (rawRecord.heading as number) : undefined);
+        (typeof rawGps?.heading === 'number' && Number.isFinite(rawGps.heading) ? (rawGps.heading as number) : undefined) ??
+        (typeof rawRecord?.heading === 'number' && Number.isFinite(rawRecord.heading) ? (rawRecord.heading as number) : undefined);
 
       liveFeedUntilRef.current = Date.now() + 3500;
       simRef.current?.ingestLiveTelemetry({
@@ -430,6 +553,7 @@ function DriverCockpit() {
     onTelemetry: handleTelemetry,
     onDrivingEvent: handleDrivingEvent,
     onTripChange: handleTripChange,
+    onDefectChange: loadRoadDefects,
     enabled: launched,
   });
 
@@ -497,6 +621,7 @@ function DriverCockpit() {
   const handlePair = useCallback(
     (id: string) => {
       setPairedDevice(id);
+      setBreadcrumbs([]);
       setPairOpen(false);
       pushCard('info', 'Unit Paired', `Cockpit linked to ${id}.`, 4000);
     },
@@ -660,6 +785,7 @@ function DriverCockpit() {
               position={snap.position}
               breadcrumbs={breadcrumbs}
               hazards={snap.hazards}
+              knownDefects={knownDefects}
               trip={snap.trip}
               speedKmh={snap.speedKmh}
               pulses={mapPulses}

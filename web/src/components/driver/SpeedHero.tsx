@@ -149,6 +149,13 @@ export function SpeedHero({
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Low Speed Phase / Slow Zone Pill */}
+        {limit <= 40 && !coasting && (
+          <div className="inline-flex items-center gap-1 rounded border border-amber-500/50 bg-amber-950/80 px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider text-amber-300 shadow-[0_0_8px_rgba(245,158,11,0.25)]">
+            <span>Slow Zone</span>
+          </div>
+        )}
       </div>
     </div>
   );

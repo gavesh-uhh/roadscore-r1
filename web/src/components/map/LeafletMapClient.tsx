@@ -63,23 +63,77 @@ function MapViewPreserver({
   mapCenter,
   mapZoom,
 }: {
-  mapCenter: [number, number];
-  mapZoom: number;
+  mapCenter?: [number, number];
+  mapZoom?: number;
 }) {
   const map = useMap();
   const prevCenterRef = useRef<[number, number] | null>(null);
-  const prevZoomPropRef = useRef<number>(mapZoom);
+  const prevZoomPropRef = useRef<number>(mapZoom ?? 13);
   const isInitialRef = useRef<boolean>(true);
 
+  // Invalidate map size when container is resized or tab/container becomes visible (especially on mobile)
   useEffect(() => {
-    if (!map || !mapCenter || !mapCenter[0] || !mapCenter[1]) return;
+    if (!map) return;
+    const container = map.getContainer();
+    if (!container) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      try {
+        map.invalidateSize({ debounceMoveend: true });
+      } catch {
+        // Safe catch
+      }
+    });
+
+    resizeObserver.observe(container);
+
+    try {
+      map.invalidateSize({ debounceMoveend: true });
+    } catch {
+      // Safe catch
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [map]);
+
+  useEffect(() => {
+    if (
+      !map ||
+      !mapCenter ||
+      !Array.isArray(mapCenter) ||
+      !Number.isFinite(mapCenter[0]) ||
+      !Number.isFinite(mapCenter[1])
+    ) {
+      return;
+    }
+
+    let currentZoom = 13;
+    try {
+      const z = map.getZoom();
+      if (typeof z === 'number' && Number.isFinite(z)) {
+        currentZoom = z;
+      }
+    } catch {
+      currentZoom = 13;
+    }
+
+    const safeZoom =
+      typeof mapZoom === 'number' && Number.isFinite(mapZoom)
+        ? mapZoom
+        : currentZoom;
 
     if (isInitialRef.current) {
       // First mount initial view
-      map.setView(mapCenter, mapZoom, { animate: false });
-      prevCenterRef.current = [mapCenter[0], mapCenter[1]];
-      prevZoomPropRef.current = mapZoom;
-      isInitialRef.current = false;
+      try {
+        map.setView(mapCenter, safeZoom, { animate: false });
+        prevCenterRef.current = [mapCenter[0], mapCenter[1]];
+        prevZoomPropRef.current = safeZoom;
+        isInitialRef.current = false;
+      } catch {
+        // Container may not be rendered yet, will retry on next render
+      }
       return;
     }
 
@@ -89,21 +143,47 @@ function MapViewPreserver({
       Math.abs(prev[0] - mapCenter[0]) > 0.0002 ||
       Math.abs(prev[1] - mapCenter[1]) > 0.0002;
 
-    const hasExplicitZoomPropChange = prevZoomPropRef.current !== mapZoom;
+    const hasExplicitZoomPropChange = prevZoomPropRef.current !== safeZoom;
 
     if (hasMeaningfulCenterChange) {
-      // Smoothly fly to target driver coordinate
-      map.flyTo(mapCenter, hasExplicitZoomPropChange ? mapZoom : map.getZoom(), {
-        duration: 0.9,
-        easeLinearity: 0.25,
-      });
+      try {
+        const size = map.getSize();
+        let validCurrentCenter = false;
+        try {
+          const c = map.getCenter();
+          validCurrentCenter = !!c && Number.isFinite(c.lat) && Number.isFinite(c.lng);
+        } catch {
+          validCurrentCenter = false;
+        }
+
+        // Only use flyTo if map container has valid non-zero dimensions and existing center is valid
+        if (size && size.x > 0 && size.y > 0 && validCurrentCenter) {
+          map.flyTo(mapCenter, hasExplicitZoomPropChange ? safeZoom : currentZoom, {
+            duration: 0.9,
+            easeLinearity: 0.25,
+          });
+        } else {
+          map.setView(mapCenter, safeZoom, { animate: false });
+        }
+      } catch {
+        try {
+          map.setView(mapCenter, safeZoom, { animate: false });
+        } catch {
+          // Ignore
+        }
+      }
+
       prevCenterRef.current = [mapCenter[0], mapCenter[1]];
       if (hasExplicitZoomPropChange) {
-        prevZoomPropRef.current = mapZoom;
+        prevZoomPropRef.current = safeZoom;
       }
     } else if (hasExplicitZoomPropChange) {
-      map.setZoom(mapZoom);
-      prevZoomPropRef.current = mapZoom;
+      try {
+        map.setZoom(safeZoom);
+      } catch {
+        // Ignore
+      }
+      prevZoomPropRef.current = safeZoom;
     }
   }, [map, mapCenter, mapZoom]);
 
@@ -297,9 +377,13 @@ const VehicleDeadReckoningMarker = memo(function VehicleDeadReckoningMarker({
           const currentLat = baseLat + dLat;
           const currentLon = baseLon + dLon;
 
-          markerRef.current.setLatLng([currentLat, currentLon]);
+          if (Number.isFinite(currentLat) && Number.isFinite(currentLon)) {
+            markerRef.current.setLatLng([currentLat, currentLon]);
+          } else if (Number.isFinite(baseLat) && Number.isFinite(baseLon)) {
+            markerRef.current.setLatLng([baseLat, baseLon]);
+          }
         }
-      } else if (markerRef.current) {
+      } else if (markerRef.current && Number.isFinite(baseLat) && Number.isFinite(baseLon)) {
         markerRef.current.setLatLng([baseLat, baseLon]);
       }
 
@@ -309,6 +393,10 @@ const VehicleDeadReckoningMarker = memo(function VehicleDeadReckoningMarker({
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
   }, []);
+
+  if (!Number.isFinite(marker.lat) || !Number.isFinite(marker.lon)) {
+    return null;
+  }
 
   return (
     <Marker
@@ -383,9 +471,43 @@ export default function LeafletMapClient({
   onMapClick,
   className = '',
 }: OSMMapProps) {
+  const safeCenter: [number, number] =
+    Array.isArray(center) && Number.isFinite(center[0]) && Number.isFinite(center[1])
+      ? [center[0], center[1]]
+      : [6.915, 79.852];
+  const safeZoom: number = typeof zoom === 'number' && Number.isFinite(zoom) ? zoom : 13;
+
+  // Filter out any markers with invalid coordinates
+  const validMarkers = markers.filter((m) => Number.isFinite(m.lat) && Number.isFinite(m.lon));
+
+  // Sanitize polylines to only keep valid finite lat/lng pairs
+  const validPolylines = polylines
+    .map((poly) => ({
+      ...poly,
+      positions: poly.positions.filter(
+        (pos) => Array.isArray(pos) && Number.isFinite(pos[0]) && Number.isFinite(pos[1])
+      ),
+    }))
+    .filter((poly) => poly.positions.length >= 2);
+
+  // Sanitize hexagons
+  const validHexagons = hexagons
+    .map((hex) => ({
+      ...hex,
+      boundary: hex.boundary.filter(
+        (pt) => Array.isArray(pt) && Number.isFinite(pt[0]) && Number.isFinite(pt[1])
+      ),
+    }))
+    .filter((hex) => hex.boundary.length >= 3);
+
+  // Sanitize event pulses
+  const validEventPulses = eventPulses.filter(
+    (pulse) => Number.isFinite(pulse.lat) && Number.isFinite(pulse.lon)
+  );
+
   // Separate vehicle markers from other markers for specialized 60 FPS interpolation
-  const vehicleMarkers = markers.filter((m) => m.type === 'vehicle');
-  const staticMarkers = markers.filter((m) => m.type !== 'vehicle');
+  const vehicleMarkers = validMarkers.filter((m) => m.type === 'vehicle');
+  const staticMarkers = validMarkers.filter((m) => m.type !== 'vehicle');
 
   // Filter high/critical severity event markers that warrant real-time radar ripples
   const criticalEventMarkers = staticMarkers.filter(
@@ -394,8 +516,8 @@ export default function LeafletMapClient({
 
   return (
     <div className={`w-full h-full rounded overflow-hidden border border-zinc-800 relative z-0 ${className}`}>
-      <MapContainer center={center} zoom={zoom} scrollWheelZoom={true} className="w-full h-full">
-        <MapViewPreserver mapCenter={center} mapZoom={zoom} />
+      <MapContainer center={safeCenter} zoom={safeZoom} scrollWheelZoom={true} className="w-full h-full">
+        <MapViewPreserver mapCenter={safeCenter} mapZoom={safeZoom} />
         <MapClickHandler onClick={onMapClick} />
 
         <TileLayer
@@ -404,7 +526,7 @@ export default function LeafletMapClient({
         />
 
         {/* Polylines */}
-        {polylines.map((poly, idx) => (
+        {validPolylines.map((poly, idx) => (
           <Polyline
             key={poly.id ? `poly-${poly.id}-${idx}` : `poly-${idx}`}
             positions={poly.positions}
@@ -418,7 +540,7 @@ export default function LeafletMapClient({
         ))}
 
         {/* H3 Hexagons */}
-        {hexagons.map((hex, idx) => (
+        {validHexagons.map((hex, idx) => (
           <Polygon
             key={hex.id ? `hex-${hex.id}-${idx}` : `hex-${idx}`}
             positions={hex.boundary}
@@ -502,7 +624,7 @@ export default function LeafletMapClient({
         ))}
 
         {/* Explicit Realtime Event Pulses (from SSE / CDC instant stream) */}
-        {eventPulses.map((pulse, idx) => (
+        {validEventPulses.map((pulse, idx) => (
           <Marker
             key={`pulse-stream-${pulse.id}-${idx}`}
             position={[pulse.lat, pulse.lon]}

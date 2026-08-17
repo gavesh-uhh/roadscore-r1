@@ -20,6 +20,18 @@ export type Lane = 'left' | 'center' | 'right';
 
 export type HazardSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 
+export interface KnownRoadDefect {
+  id: string;
+  lat: number;
+  lon: number;
+  severity: HazardSeverity;
+  kind?: HazardKind;
+  lane?: Lane;
+  title?: string;
+  h3_12?: string;
+  status?: string;
+}
+
 export interface HorizonHazard {
   id: string;
   kind: HazardKind;
@@ -98,6 +110,7 @@ export type SimEvent =
   | { type: 'hazard-spawned'; hazard: HorizonHazard }
   | { type: 'hazard-approaching'; hazard: HorizonHazard }
   | { type: 'hazard-passed'; hazard: HorizonHazard }
+  | { type: 'speed-reduction-ahead'; prevLimit: number; newLimit: number; roadName?: string }
   | { type: 'exoneration'; title: string; message: string }
   | { type: 'deduction'; title: string; message: string; points: number }
   | { type: 'eco-tip'; title: string; message: string }
@@ -147,6 +160,9 @@ export class DemoSimulator {
 
   // Horizon + scoring
   private hazards: HorizonHazard[] = [];
+  private knownDefects: KnownRoadDefect[] = [];
+  private passedDefectIds = new Set<string>();
+  private dismissedHazardIds = new Set<string>();
   private score = 100;
   private deductions = 0;
   private protectedCount = 0;
@@ -330,9 +346,39 @@ export class DemoSimulator {
     this.impulseALat = mps2 * (Math.random() > 0.5 ? 1 : -1);
   }
 
+  /** Set known road defects loaded from Supabase or live CDC for forward lookahead. */
+  setKnownDefects(defects: KnownRoadDefect[]): void {
+    this.knownDefects = defects.filter(
+      (d) =>
+        (!d.status || d.status === 'active') &&
+        Number.isFinite(d.lat) &&
+        Number.isFinite(d.lon)
+    );
+  }
+
+  /** Set dynamic regulatory speed limit (km/h) from OSM / GPS lookup. */
+  setSpeedLimit(limitKmh: number, roadName?: string): void {
+    if (Number.isFinite(limitKmh) && limitKmh > 0 && limitKmh <= 250) {
+      const rounded = Math.round(limitKmh);
+      const prev = this.speedLimitKmh;
+      if (rounded < prev && (prev - rounded >= 10 || this.speedKmh > rounded + 5)) {
+        this.emit({
+          type: 'speed-reduction-ahead',
+          prevLimit: prev,
+          newLimit: rounded,
+          roadName,
+        });
+      }
+      this.speedLimitKmh = rounded;
+    }
+  }
+
   /** Manually clear a hazard from the horizon queue. */
   dismissHazard(id: string): void {
     this.hazards = this.hazards.filter((h) => h.id !== id);
+    this.dismissedHazardIds.add(id);
+    const rawId = id.replace('def_', '');
+    this.dismissedHazardIds.add(rawId);
   }
 
   /** §3.4 — coach the driver to lift off and coast toward a queue. */
@@ -624,18 +670,19 @@ export class DemoSimulator {
 
     if (this.live) {
       // ---- Live drive: kinematics arrive from the vehicle -------------
-      const v = this.live.speedKmh / 3.6;
-      const aLong = this.live.aLong ?? (v - this.prevSpeedMps) / dt;
-      this.g.aLong = clamp(aLong, -8, 5);
-      this.g.aLat = clamp(this.live.aLat ?? 0, -8, 8);
-      this.speedKmh = this.live.speedKmh;
+      const liveSpeed = Number.isFinite(this.live.speedKmh) ? this.live.speedKmh : 0;
+      const v = liveSpeed / 3.6;
+      const aLong = Number.isFinite(this.live.aLong) ? this.live.aLong! : (v - this.prevSpeedMps) / dt;
+      this.g.aLong = clamp(Number.isFinite(aLong) ? aLong : 0, -8, 5);
+      this.g.aLat = clamp(Number.isFinite(this.live.aLat) ? this.live.aLat! : 0, -8, 8);
+      this.speedKmh = liveSpeed;
       this.prevSpeedMps = v;
-      if (typeof this.live.lat === 'number' && typeof this.live.lon === 'number') {
-        this.position.lat = this.live.lat;
-        this.position.lon = this.live.lon;
+      if (Number.isFinite(this.live.lat) && Number.isFinite(this.live.lon)) {
+        this.position.lat = this.live.lat!;
+        this.position.lon = this.live.lon!;
       }
-      if (typeof this.live.headingDeg === 'number') {
-        this.position.headingDeg = this.live.headingDeg;
+      if (Number.isFinite(this.live.headingDeg)) {
+        this.position.headingDeg = this.live.headingDeg!;
       }
     } else {
       // ---- Sim drive: ease speed toward the slider target -------------
@@ -714,11 +761,20 @@ export class DemoSimulator {
     {
       const { lat, lon } = this.position;
       const last = this.lastCrumb;
-      const moved = last ? haversineM(last[0], last[1], lat, lon) : Infinity;
-      if (moved > 5) {
+      if (!last) {
         this.lastCrumb = [lat, lon];
-        this.breadcrumbs.push([lat, lon]);
-        if (this.breadcrumbs.length > 600) this.breadcrumbs.shift();
+        this.breadcrumbs = [[lat, lon]];
+      } else {
+        const moved = haversineM(last[0], last[1], lat, lon);
+        if (moved > 400) {
+          // Reset breadcrumbs on large jumps or initial GPS fix to eliminate straight line artifact
+          this.lastCrumb = [lat, lon];
+          this.breadcrumbs = [[lat, lon]];
+        } else if (moved > 5) {
+          this.lastCrumb = [lat, lon];
+          this.breadcrumbs.push([lat, lon]);
+          if (this.breadcrumbs.length > 600) this.breadcrumbs.shift();
+        }
       }
     }
 
@@ -772,6 +828,9 @@ export class DemoSimulator {
       if (this.coastRemainingS <= 0) this.coasting = false;
     }
 
+    // ---- Defect Lookahead Horizon Projection (0–300m forward cone) ----
+    this.evaluateDefectLookahead();
+
     // ---- Hazard horizon countdown --------------------------------------
     const vMps = this.speedKmh / 3.6;
     const survivors: HorizonHazard[] = [];
@@ -787,6 +846,9 @@ export class DemoSimulator {
 
       if (h.distanceM <= -8) {
         this.lastHazardPassedAtMs = Date.now();
+        if (h.id.startsWith('def_')) {
+          this.passedDefectIds.add(h.id.replace('def_', ''));
+        }
         this.emit({ type: 'hazard-passed', hazard: { ...h } });
       } else {
         survivors.push(h);
@@ -807,6 +869,112 @@ export class DemoSimulator {
         // listener errors must not break the sim loop
       }
     });
+  }
+
+  /**
+   * Evaluates all known road defects against the vehicle's live position and heading.
+   * Dynamically projects defects within the 300m forward cone into the active hazards list.
+   */
+  private evaluateDefectLookahead(): void {
+    if (this.knownDefects.length === 0) return;
+    const vLat = this.position.lat;
+    const vLon = this.position.lon;
+    const vHeading = this.position.headingDeg;
+    if (!Number.isFinite(vLat) || !Number.isFinite(vLon) || !Number.isFinite(vHeading)) return;
+
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const phi1 = toRad(vLat);
+
+    for (const defect of this.knownDefects) {
+      if (this.dismissedHazardIds.has(defect.id) || this.passedDefectIds.has(defect.id)) {
+        continue;
+      }
+
+      const hazardId = `def_${defect.id}`;
+      if (this.dismissedHazardIds.has(hazardId)) continue;
+
+      const existingHazard = this.hazards.find((h) => h.id === hazardId || h.id === defect.id);
+
+      // Compute Great-Circle distance
+      const distM = haversineM(vLat, vLon, defect.lat, defect.lon);
+
+      // Compute Bearing to Defect
+      const phi2 = toRad(defect.lat);
+      const dLon = toRad(defect.lon - vLon);
+      const y = Math.sin(dLon) * Math.cos(phi2);
+      const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);
+      const bearingDeg = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+      const relAngle = ((bearingDeg - vHeading + 540) % 360) - 180;
+
+      // Check if within 300m and forward viewing cone ([-65 deg, +65 deg])
+      const inForwardCone = Math.abs(relAngle) <= 65;
+      const fwdDistM = distM * Math.cos(toRad(relAngle));
+
+      if (existingHazard) {
+        // If live vehicle GPS is available, sync projected distance
+        if (this.live && inForwardCone && fwdDistM > 0) {
+          existingHazard.distanceM = fwdDistM;
+        }
+        // If defect passed behind vehicle
+        if (!inForwardCone && Math.abs(relAngle) > 90 && distM < 25) {
+          this.passedDefectIds.add(defect.id);
+        }
+        continue;
+      }
+
+      // New lookahead hazard entering the 300m horizon cone
+      if (inForwardCone && distM <= MAX_RANGE_M && fwdDistM >= 5) {
+        const lane: Lane =
+          defect.lane || (relAngle < -7 ? 'left' : relAngle > 7 ? 'right' : 'center');
+        const kind: HazardKind = defect.kind || 'pothole';
+        const sev = defect.severity || 'high';
+
+        const kindLabel =
+          kind === 'speed_bump'
+            ? 'Speed bump'
+            : kind === 'water_pooling'
+            ? 'Water pooling'
+            : kind === 'sharp_curve'
+            ? 'Rough road'
+            : 'Pothole';
+
+        const sevPrefix = sev === 'critical' ? 'Severe ' : sev === 'high' ? 'Major ' : '';
+        const title = defect.title || `${sevPrefix}${kindLabel}`;
+        const advisory =
+          lane === 'left'
+            ? 'Hold Right'
+            : lane === 'right'
+            ? 'Hold Left'
+            : kind === 'speed_bump'
+            ? 'Target 20 km/h'
+            : 'Slow Down';
+
+        const speech = `Caution. ${sevPrefix}${kindLabel.toLowerCase()} on the ${lane} in ${Math.round(
+          fwdDistM,
+        )} meters.`;
+
+        const hazard: HorizonHazard = {
+          id: hazardId,
+          kind,
+          title,
+          distanceM: Math.min(MAX_RANGE_M, Math.max(5, fwdDistM)),
+          lane,
+          severity: sev,
+          advisory,
+          advisorySpeedKmh:
+            kind === 'speed_bump' ? 20 : sev === 'critical' ? 25 : sev === 'high' ? 35 : 45,
+          speech,
+          spawnedAt: Date.now(),
+          alertAnnounced: fwdDistM <= HAZARD_ALERT_RADIUS_M,
+          lat: defect.lat,
+          lon: defect.lon,
+        };
+
+        this.hazards.push(hazard);
+        this.hazards.sort((a, b) => a.distanceM - b.distanceM);
+        this.emit({ type: 'hazard-spawned', hazard: { ...hazard } });
+      }
+    }
   }
 }
 

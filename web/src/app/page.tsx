@@ -775,7 +775,7 @@ export default function UnifiedOperationsDesk() {
                   setSelectedDriverId(driver.driver_id);
                   const devId = driver.assigned_device_id;
                   const pos = devId ? devicePositions.get(devId) : null;
-                  if (pos?.gps?.lat && pos?.gps?.lon) {
+                  if (pos?.gps?.lat != null && pos?.gps?.lon != null && Number.isFinite(pos.gps.lat) && Number.isFinite(pos.gps.lon)) {
                     setMapCenter([pos.gps.lat, pos.gps.lon]);
                     setMapZoom(16);
                   } else {
@@ -794,7 +794,7 @@ export default function UnifiedOperationsDesk() {
                       if (!isCurrentlySelected) {
                         const devId = driver.assigned_device_id;
                         const pos = devId ? devicePositions.get(devId) : null;
-                        if (pos?.gps?.lat && pos?.gps?.lon) {
+                        if (pos?.gps?.lat != null && pos?.gps?.lon != null && Number.isFinite(pos.gps.lat) && Number.isFinite(pos.gps.lon)) {
                           setMapCenter([pos.gps.lat, pos.gps.lon]);
                         }
                       }
@@ -996,7 +996,7 @@ export default function UnifiedOperationsDesk() {
                       setSelectedDriverId(dId);
                       const d = drivers.find((drv) => drv.driver_id === dId);
                       const pos = d?.assigned_device_id ? devicePositions.get(d.assigned_device_id) : null;
-                      if (pos?.gps?.lat && pos?.gps?.lon) {
+                      if (pos?.gps?.lat != null && pos?.gps?.lon != null && Number.isFinite(pos.gps.lat) && Number.isFinite(pos.gps.lon)) {
                         setMapCenter([pos.gps.lat, pos.gps.lon]);
                       }
                     }}

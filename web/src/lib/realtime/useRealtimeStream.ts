@@ -35,6 +35,7 @@ export interface RealtimeStreamOptions {
   onTelemetry?: (telemetry: TelemetryPacket) => void;
   onDrivingEvent?: (event: DrivingEventPacket, rawPayload?: any) => void;
   onTripChange?: (tripPayload?: any) => void;
+  onDefectChange?: (defectPayload?: any) => void;
   enabled?: boolean;
 }
 
@@ -64,6 +65,7 @@ export function useRealtimeStream({
   onTelemetry,
   onDrivingEvent,
   onTripChange,
+  onDefectChange,
   enabled = true,
 }: RealtimeStreamOptions): RealtimeStreamState {
   const [feedMode, setFeedMode] = useState<FeedMode>('cdc');
@@ -77,6 +79,7 @@ export function useRealtimeStream({
   const onTelemetryRef = useRef(onTelemetry);
   const onDrivingEventRef = useRef(onDrivingEvent);
   const onTripChangeRef = useRef(onTripChange);
+  const onDefectChangeRef = useRef(onDefectChange);
   const isSseActiveRef = useRef(isSseActive);
   const eventSourceRef = useRef<EventSource | null>(null);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -85,7 +88,8 @@ export function useRealtimeStream({
     onTelemetryRef.current = onTelemetry;
     onDrivingEventRef.current = onDrivingEvent;
     onTripChangeRef.current = onTripChange;
-  }, [onTelemetry, onDrivingEvent, onTripChange]);
+    onDefectChangeRef.current = onDefectChange;
+  }, [onTelemetry, onDrivingEvent, onTripChange, onDefectChange]);
 
   useEffect(() => {
     isSseActiveRef.current = isSseActive;
@@ -345,6 +349,14 @@ export function useRealtimeStream({
         (payload) => {
           setIsCdcActive(true);
           onTripChangeRef.current?.(payload.new || payload.old);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'road_defects' },
+        (payload) => {
+          setIsCdcActive(true);
+          onDefectChangeRef.current?.(payload.new || payload.old);
         }
       )
       .subscribe((status) => {

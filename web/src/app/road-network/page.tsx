@@ -3,9 +3,14 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { Header } from '@/components/common/Header';
-import { MapHexagon, OSMMap } from '@/components/map/OSMMap';
+import { MapHexagon, MapMarker, OSMMap } from '@/components/map/OSMMap';
+import {
+  RoadDisturbanceToolbar,
+  type PainterMode,
+} from '@/components/road-network/RoadDisturbanceToolbar';
 import { createClient } from '@/lib/supabase/client';
-import { cellToBoundary, cellToLatLng } from 'h3-js';
+import { cellToBoundary, cellToLatLng, latLngToCell } from 'h3-js';
+import type { HazardKind, HazardSeverity, Lane } from '@/lib/sim/demoSimulator';
 import {
   Layers,
   Activity,
@@ -18,6 +23,9 @@ import {
   Compass,
   Gauge,
   TrendingUp,
+  MapPin,
+  Wrench,
+  Flame,
 } from 'lucide-react';
 
 interface RoadCellRow {
@@ -36,30 +44,68 @@ interface RoadCellRow {
   updated_at?: string;
 }
 
+interface DefectItem {
+  id: string;
+  h3_12: string;
+  heading_sector: number;
+  lat: number;
+  lon: number;
+  severity: HazardSeverity;
+  confidence: number;
+  distinct_devices: number;
+  spike_rate: number;
+  status: 'active' | 'repaired' | 'disputed';
+  defect_type?: HazardKind;
+  lane?: Lane;
+  first_seen?: string;
+  last_seen?: string;
+}
+
 type RoughnessFilter = 'all' | 'severe' | 'rough' | 'wear' | 'smooth';
 
 export default function RoadNetworkQuality() {
   const [roadCells, setRoadCells] = useState<RoadCellRow[]>([]);
+  const [defects, setDefects] = useState<DefectItem[]>([]);
   const [selectedCell, setSelectedCell] = useState<RoadCellRow | null>(null);
+  const [selectedDefect, setSelectedDefect] = useState<DefectItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [roughnessFilter, setRoughnessFilter] = useState<RoughnessFilter>('all');
   const [mapCenter, setMapCenter] = useState<[number, number]>([6.915, 79.852]);
   const [mapZoom, setMapZoom] = useState<number>(14);
 
+  // Disturbance Painter State
+  const [activeMode, setActiveMode] = useState<PainterMode>('inspect');
+  const [defectType, setDefectType] = useState<HazardKind>('pothole');
+  const [defectSeverity, setDefectSeverity] = useState<HazardSeverity>('high');
+  const [defectLane, setDefectLane] = useState<Lane>('left');
+  const [cellRoughness, setCellRoughness] = useState<number>(85);
+  const [cellSpikes, setCellSpikes] = useState<number>(8);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+
   const supabase = useMemo(() => createClient(), []);
 
-  const loadRoadCells = useCallback(async () => {
+  // Fetch both Road Cells and Confirmed Road Defects
+  const loadNetworkData = useCallback(async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('road_cells')
-        .select('*')
-        .order('roughness_index', { ascending: false })
-        .limit(300);
 
-      if (data && !error) {
-        const mapped: RoadCellRow[] = data.map((c: any) => {
+      const [cellsRes, defectsRes] = await Promise.all([
+        supabase
+          .from('road_cells')
+          .select('*')
+          .order('roughness_index', { ascending: false })
+          .limit(300),
+        supabase
+          .from('road_defects')
+          .select('*')
+          .order('first_seen', { ascending: false })
+          .limit(200),
+      ]);
+
+      if (cellsRes.data && !cellsRes.error) {
+        const mappedCells: RoadCellRow[] = cellsRes.data.map((c: any) => {
           let lat = c.centroid_lat ? Number(c.centroid_lat) : undefined;
           let lon = c.centroid_lon ? Number(c.centroid_lon) : undefined;
           if ((lat === undefined || lon === undefined) && c.h3_12) {
@@ -74,53 +120,82 @@ export default function RoadNetworkQuality() {
 
           return {
             h3_12: String(c.h3_12 || ''),
-            heading_sector: c.heading_sector !== null && c.heading_sector !== undefined ? Number(c.heading_sector) : undefined,
+            heading_sector:
+              c.heading_sector !== null && c.heading_sector !== undefined
+                ? Number(c.heading_sector)
+                : undefined,
             centroid_lat: lat,
             centroid_lon: lon,
             roughness_index: Number(c.roughness_index ?? 0),
             pass_count: Number(c.pass_count ?? 0),
-            device_count: c.device_count !== null && c.device_count !== undefined ? Number(c.device_count) : undefined,
+            device_count:
+              c.device_count !== null && c.device_count !== undefined
+                ? Number(c.device_count)
+                : undefined,
             spike_count: Number(c.spike_count ?? 0),
             speed_p85_kmh: Number(c.speed_p85_kmh ?? 0),
             defect_confidence: Number(c.defect_confidence ?? 0),
-            rough_mean: c.rough_mean !== null && c.rough_mean !== undefined ? Number(c.rough_mean) : undefined,
+            rough_mean:
+              c.rough_mean !== null && c.rough_mean !== undefined
+                ? Number(c.rough_mean)
+                : undefined,
             last_pass_at: c.last_pass_at ? String(c.last_pass_at) : undefined,
             updated_at: c.updated_at ? String(c.updated_at) : undefined,
           };
         });
 
-        setRoadCells(mapped);
+        setRoadCells(mappedCells);
 
-        if (mapped.length > 0) {
-          setSelectedCell((prev) => {
-            if (prev) {
-              const stillExists = mapped.find(
-                (m) =>
-                  m.h3_12 === prev.h3_12 &&
-                  (prev.heading_sector === undefined || m.heading_sector === prev.heading_sector)
-              );
-              if (stillExists) return stillExists;
-            }
-            return mapped[0];
-          });
-
-          // Focus map on the top/most active cell
-          const topCell = mapped[0];
-          if (topCell.centroid_lat && topCell.centroid_lon) {
-            setMapCenter([topCell.centroid_lat, topCell.centroid_lon]);
+        if (mappedCells.length > 0 && !selectedCell) {
+          setSelectedCell(mappedCells[0]);
+          if (mappedCells[0].centroid_lat && mappedCells[0].centroid_lon) {
+            setMapCenter([mappedCells[0].centroid_lat, mappedCells[0].centroid_lon]);
           }
         }
       }
+
+      if (defectsRes.data && !defectsRes.error) {
+        const mappedDefects: DefectItem[] = defectsRes.data.map((d: any, idx: number) => {
+          let lat = Number(d.lat ?? 0);
+          let lon = Number(d.lon ?? 0);
+          if ((!lat || !lon) && d.h3_12) {
+            try {
+              const coords = cellToLatLng(d.h3_12);
+              lat = coords[0];
+              lon = coords[1];
+            } catch {
+              // ignore
+            }
+          }
+
+          return {
+            id: String(d.id || `def-${idx}`),
+            h3_12: String(d.h3_12 || ''),
+            heading_sector: Number(d.heading_sector ?? 0),
+            lat,
+            lon,
+            severity: (d.severity as any) || 'high',
+            confidence: Number(d.confidence ?? 0.85),
+            distinct_devices: Number(d.distinct_devices ?? 3),
+            spike_rate: Number(d.spike_rate ?? 0.8),
+            status: (d.status as any) || 'active',
+            first_seen: d.first_seen ? String(d.first_seen) : undefined,
+            last_seen: d.last_seen ? String(d.last_seen) : undefined,
+          };
+        });
+
+        setDefects(mappedDefects);
+      }
     } catch (err) {
-      console.error('Error loading road cells:', err);
+      console.error('Error loading road network data:', err);
     } finally {
       setLoading(false);
     }
-  }, [supabase]);
+  }, [supabase, selectedCell]);
 
   useEffect(() => {
-    loadRoadCells();
-  }, [loadRoadCells]);
+    loadNetworkData();
+  }, [loadNetworkData]);
 
   // Handle cell selection
   const handleSelectCell = (cell: RoadCellRow) => {
@@ -136,6 +211,237 @@ export default function RoadNetworkQuality() {
       } catch {
         // ignore
       }
+    }
+  };
+
+  // Handle Map Click based on Active Tool Mode
+  const handleMapClick = async (coords: [number, number]) => {
+    const [lat, lon] = coords;
+    let h3_12: string;
+    try {
+      h3_12 = latLngToCell(lat, lon, 12);
+    } catch (e) {
+      console.error('Failed to compute H3 res 12 cell for coords:', e);
+      return;
+    }
+
+    if (activeMode === 'inspect') {
+      // Find matching cell
+      const matched = roadCells.find((c) => c.h3_12 === h3_12);
+      if (matched) {
+        handleSelectCell(matched);
+      } else {
+        // Create virtual preview cell
+        const virtualCell: RoadCellRow = {
+          h3_12,
+          centroid_lat: lat,
+          centroid_lon: lon,
+          roughness_index: 10,
+          pass_count: 0,
+          spike_count: 0,
+          speed_p85_kmh: 0,
+          defect_confidence: 0,
+        };
+        setSelectedCell(virtualCell);
+      }
+      return;
+    }
+
+    if (activeMode === 'place_defect') {
+      setIsSaving(true);
+      const newDefectId = `def_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const nowIso = new Date().toISOString();
+
+      const defectPayload = {
+        h3_12,
+        heading_sector: 0,
+        lat,
+        lon,
+        severity: defectSeverity,
+        confidence:
+          defectSeverity === 'critical'
+            ? 0.95
+            : defectSeverity === 'high'
+            ? 0.88
+            : defectSeverity === 'medium'
+            ? 0.75
+            : 0.6,
+        distinct_devices: 3,
+        spike_rate:
+          defectSeverity === 'critical' ? 0.9 : defectSeverity === 'high' ? 0.75 : 0.5,
+        status: 'active',
+        first_seen: nowIso,
+        last_seen: nowIso,
+      };
+
+      const newDefectItem: DefectItem = {
+        id: newDefectId,
+        h3_12,
+        heading_sector: 0,
+        lat,
+        lon,
+        severity: defectSeverity,
+        confidence: defectPayload.confidence,
+        distinct_devices: 3,
+        spike_rate: defectPayload.spike_rate,
+        status: 'active',
+        defect_type: defectType,
+        lane: defectLane,
+        first_seen: nowIso,
+        last_seen: nowIso,
+      };
+
+      // Also compute paired cell roughness
+      const defaultCellRoughness =
+        defectSeverity === 'critical' ? 92 : defectSeverity === 'high' ? 82 : defectSeverity === 'medium' ? 62 : 38;
+      const cellPayload = {
+        h3_12,
+        heading_sector: 0,
+        centroid_lat: lat,
+        centroid_lon: lon,
+        roughness_index: defaultCellRoughness,
+        pass_count: 14,
+        device_count: 3,
+        spike_count: defectSeverity === 'critical' ? 12 : 7,
+        speed_p85_kmh: 42,
+        defect_confidence: 0.9,
+        updated_at: nowIso,
+      };
+
+      // Optimistic local update
+      setDefects((prev) => [newDefectItem, ...prev.filter((d) => d.h3_12 !== h3_12)]);
+      setRoadCells((prev) => {
+        const exists = prev.find((c) => c.h3_12 === h3_12);
+        if (exists) {
+          return prev.map((c) =>
+            c.h3_12 === h3_12
+              ? {
+                  ...c,
+                  roughness_index: defaultCellRoughness,
+                  spike_count: Math.max(c.spike_count, 6),
+                  updated_at: nowIso,
+                }
+              : c
+          );
+        }
+        return [cellPayload, ...prev];
+      });
+      setSelectedDefect(newDefectItem);
+
+      try {
+        await Promise.allSettled([
+          supabase
+            .from('road_defects')
+            .upsert(defectPayload, { onConflict: 'h3_12,heading_sector' }),
+          supabase
+            .from('road_cells')
+            .upsert(cellPayload, { onConflict: 'h3_12,heading_sector' }),
+        ]);
+        setSaveStatus(`Placed ${defectSeverity.toUpperCase()} ${defectType.replace('_', ' ')}`);
+      } catch (err) {
+        console.warn('Database write fell back to local state:', err);
+        setSaveStatus(`Placed locally (${h3_12.slice(0, 8)}...)`);
+      } finally {
+        setIsSaving(false);
+        setTimeout(() => setSaveStatus(null), 3500);
+      }
+      return;
+    }
+
+    if (activeMode === 'paint_cell') {
+      setIsSaving(true);
+      const nowIso = new Date().toISOString();
+      const cellPayload = {
+        h3_12,
+        heading_sector: 0,
+        centroid_lat: lat,
+        centroid_lon: lon,
+        roughness_index: cellRoughness,
+        pass_count: Math.max(cellSpikes + 6, 12),
+        device_count: 3,
+        spike_count: cellSpikes,
+        speed_p85_kmh: 45,
+        defect_confidence: cellRoughness >= 60 ? 0.85 : 0.2,
+        updated_at: nowIso,
+      };
+
+      // Optimistic local update
+      setRoadCells((prev) => {
+        const exists = prev.find((c) => c.h3_12 === h3_12);
+        if (exists) {
+          return prev.map((c) =>
+            c.h3_12 === h3_12
+              ? {
+                  ...c,
+                  roughness_index: cellRoughness,
+                  spike_count: cellSpikes,
+                  updated_at: nowIso,
+                }
+              : c
+          );
+        }
+        return [cellPayload, ...prev];
+      });
+
+      try {
+        await supabase
+          .from('road_cells')
+          .upsert(cellPayload, { onConflict: 'h3_12,heading_sector' });
+        setSaveStatus(`Painted Cell: ${cellRoughness} IRI`);
+      } catch (err) {
+        console.warn('Database write fell back to local state:', err);
+        setSaveStatus(`Painted locally (${cellRoughness} IRI)`);
+      } finally {
+        setIsSaving(false);
+        setTimeout(() => setSaveStatus(null), 3500);
+      }
+      return;
+    }
+
+    if (activeMode === 'repair') {
+      setIsSaving(true);
+      const nowIso = new Date().toISOString();
+
+      // Mark defects on this cell as repaired
+      setDefects((prev) =>
+        prev.map((d) => (d.h3_12 === h3_12 ? { ...d, status: 'repaired' } : d))
+      );
+
+      // Smooth cell
+      setRoadCells((prev) =>
+        prev.map((c) =>
+          c.h3_12 === h3_12
+            ? {
+                ...c,
+                roughness_index: 10,
+                spike_count: 0,
+                defect_confidence: 0,
+                updated_at: nowIso,
+              }
+            : c
+        )
+      );
+
+      try {
+        await Promise.allSettled([
+          supabase
+            .from('road_defects')
+            .update({ status: 'repaired', last_seen: nowIso })
+            .eq('h3_12', h3_12),
+          supabase
+            .from('road_cells')
+            .update({ roughness_index: 10, spike_count: 0, defect_confidence: 0, updated_at: nowIso })
+            .eq('h3_12', h3_12),
+        ]);
+        setSaveStatus('Marked Repaired & Smoothed Cell');
+      } catch (err) {
+        console.warn('Repair write fallback:', err);
+        setSaveStatus('Marked repaired locally');
+      } finally {
+        setIsSaving(false);
+        setTimeout(() => setSaveStatus(null), 3500);
+      }
+      return;
     }
   };
 
@@ -156,7 +462,7 @@ export default function RoadNetworkQuality() {
     });
   }, [roadCells, searchQuery, roughnessFilter]);
 
-  // Map hexagons with genuine H3 boundary polygons (no fake coordinates)
+  // Map hexagons with genuine H3 boundary polygons
   const mapHexagons: MapHexagon[] = useMemo(() => {
     const list: MapHexagon[] = [];
 
@@ -199,35 +505,67 @@ export default function RoadNetworkQuality() {
     return list;
   }, [filteredCells, selectedCell]);
 
+  // Map Markers for Pinpoint Defects
+  const mapDefectMarkers = useMemo<MapMarker[]>(() => {
+    return defects
+      .filter((d) => d.status === 'active' && Number.isFinite(d.lat) && Number.isFinite(d.lon))
+      .map((d) => {
+        let color = '#ef4444';
+        if (d.severity === 'high') color = '#f97316';
+        else if (d.severity === 'medium') color = '#eab308';
+        else if (d.severity === 'low') color = '#38bdf8';
+
+        return {
+          id: d.id,
+          lat: d.lat,
+          lon: d.lon,
+          title: `Defect: ${d.severity.toUpperCase()}`,
+          type: 'defect',
+          severity: d.severity,
+          color,
+          details: `H3: ${d.h3_12} · Spikes: ${(d.spike_rate * 100).toFixed(0)}% · Status: ${d.status}`,
+          confidence: d.confidence,
+        };
+      });
+  }, [defects]);
+
   // Roughness stats summary
   const stats = useMemo(() => {
     const total = roadCells.length;
-    if (total === 0) return { severe: 0, rough: 0, wear: 0, smooth: 0, avgIri: '0.0' };
+    if (total === 0)
+      return { severe: 0, rough: 0, wear: 0, smooth: 0, avgIri: '0.0', defectsCount: defects.length };
     const severe = roadCells.filter((c) => c.roughness_index >= 80).length;
     const rough = roadCells.filter((c) => c.roughness_index >= 55 && c.roughness_index < 80).length;
     const wear = roadCells.filter((c) => c.roughness_index >= 25 && c.roughness_index < 55).length;
     const smooth = roadCells.filter((c) => c.roughness_index < 25).length;
     const avgIri = (roadCells.reduce((a, b) => a + b.roughness_index, 0) / total).toFixed(1);
-    return { severe, rough, wear, smooth, avgIri };
-  }, [roadCells]);
+    const activeDefects = defects.filter((d) => d.status === 'active').length;
+    return { severe, rough, wear, smooth, avgIri, defectsCount: activeDefects };
+  }, [roadCells, defects]);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-black text-white font-sans text-xs">
       <Header
-        title="Road Quality Map"
-        subtitle="H3 grid spatial surface quality heatmap, multi-pass consensus & roughness index"
+        title="Road Quality Map & Disturbance Painter"
+        subtitle="H3 grid spatial surface quality heatmap, disturbance painter & real-time cockpit lookahead"
       />
 
       {/* Navigation Subheader & Color Legend */}
       <div className="bg-black border-b border-zinc-800 px-4 py-2 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-1 bg-zinc-950 p-1 rounded-md border border-zinc-800 font-mono text-[11px]">
           <Link href="/road-network" className="px-3 py-1 rounded-md bg-zinc-800 text-white font-semibold">
-            H3 Grid
+            H3 Grid & Painter
           </Link>
-          <Link href="/road-network/defects" className="px-3 py-1 rounded-md text-zinc-400 hover:text-white transition-colors">
+          <Link
+            href="/road-network/defects"
+            className="px-3 py-1 rounded-md text-zinc-400 hover:text-white transition-colors"
+          >
             Defects Inventory
           </Link>
-          <Link href="/road-network/predictions" className="px-3 py-1 rounded-md text-zinc-400 hover:text-white transition-colors">
+          <Link
+            href="/road-network/predictions"
+            className="px-3 py-1 rounded-md text-zinc-400 hover:text-white transition-colors"
+          >
             Hazard Predictions
           </Link>
         </div>
@@ -237,77 +575,141 @@ export default function RoadNetworkQuality() {
             type="button"
             onClick={() => setRoughnessFilter(roughnessFilter === 'smooth' ? 'all' : 'smooth')}
             className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
-              roughnessFilter === 'smooth' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'hover:text-zinc-200'
+              roughnessFilter === 'smooth'
+                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                : 'hover:text-zinc-200'
             }`}
           >
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
-            <span>Smooth (0-25) <span className="text-zinc-500">[{stats.smooth}]</span></span>
+            <span>
+              Smooth (0-25) <span className="text-zinc-500">[{stats.smooth}]</span>
+            </span>
           </button>
 
           <button
             type="button"
             onClick={() => setRoughnessFilter(roughnessFilter === 'wear' ? 'all' : 'wear')}
             className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
-              roughnessFilter === 'wear' ? 'bg-yellow-950 text-yellow-400 border border-yellow-800' : 'hover:text-zinc-200'
+              roughnessFilter === 'wear'
+                ? 'bg-yellow-950 text-yellow-400 border border-yellow-800'
+                : 'hover:text-zinc-200'
             }`}
           >
             <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 inline-block" />
-            <span>Wear (26-55) <span className="text-zinc-500">[{stats.wear}]</span></span>
+            <span>
+              Wear (26-55) <span className="text-zinc-500">[{stats.wear}]</span>
+            </span>
           </button>
 
           <button
             type="button"
             onClick={() => setRoughnessFilter(roughnessFilter === 'rough' ? 'all' : 'rough')}
             className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
-              roughnessFilter === 'rough' ? 'bg-orange-950 text-orange-400 border border-orange-800' : 'hover:text-zinc-200'
+              roughnessFilter === 'rough'
+                ? 'bg-orange-950 text-orange-400 border border-orange-800'
+                : 'hover:text-zinc-200'
             }`}
           >
             <span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block" />
-            <span>Rough (56-80) <span className="text-zinc-500">[{stats.rough}]</span></span>
+            <span>
+              Rough (56-80) <span className="text-zinc-500">[{stats.rough}]</span>
+            </span>
           </button>
 
           <button
             type="button"
             onClick={() => setRoughnessFilter(roughnessFilter === 'severe' ? 'all' : 'severe')}
             className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
-              roughnessFilter === 'severe' ? 'bg-rose-950 text-rose-400 border border-rose-800' : 'hover:text-zinc-200'
+              roughnessFilter === 'severe'
+                ? 'bg-rose-950 text-rose-400 border border-rose-800'
+                : 'hover:text-zinc-200'
             }`}
           >
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" />
-            <span className="text-white font-bold">Severe (&gt;80) <span className="text-rose-300">[{stats.severe}]</span></span>
+            <span className="text-white font-bold">
+              Severe (&gt;80) <span className="text-rose-300">[{stats.severe}]</span>
+            </span>
           </button>
         </div>
       </div>
 
       {/* Main Workspace Layout */}
-      <div className="flex-1 flex overflow-hidden p-3 gap-3 min-h-0">
-        {/* Map Canvas */}
-        <div className="flex-1 rounded-md border border-zinc-800 overflow-hidden bg-zinc-950 relative">
-          <OSMMap
-            center={mapCenter}
-            zoom={mapZoom}
-            hexagons={mapHexagons}
-            onHexagonClick={(hex) => {
-              const matched = roadCells.find((c) => {
-                const hexId = c.heading_sector !== undefined ? `${c.h3_12}_${c.heading_sector}` : c.h3_12;
-                return hexId === hex.id || c.h3_12 === hex.id;
-              });
-              if (matched) handleSelectCell(matched);
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden p-3 gap-3 min-h-0">
+        {/* Left / Center Map Section */}
+        <div className="flex-1 flex flex-col gap-2 min-h-0">
+          {/* Disturbance Painter Toolbar */}
+          <RoadDisturbanceToolbar
+            activeMode={activeMode}
+            onModeChange={setActiveMode}
+            defectType={defectType}
+            onDefectTypeChange={setDefectType}
+            defectSeverity={defectSeverity}
+            onDefectSeverityChange={setDefectSeverity}
+            defectLane={defectLane}
+            onDefectLaneChange={setDefectLane}
+            cellRoughness={cellRoughness}
+            onCellRoughnessChange={setCellRoughness}
+            cellSpikes={cellSpikes}
+            onCellSpikesChange={setCellSpikes}
+            isSaving={isSaving}
+            saveStatus={saveStatus}
+            stats={{
+              defectsCount: stats.defectsCount,
+              cellsCount: roadCells.length,
+              severeCount: stats.severe,
             }}
           />
 
-          {/* Quick Floating Map Overlay */}
-          <div className="absolute top-3 left-3 z-10 bg-zinc-950/90 border border-zinc-800 rounded px-3 py-2 text-[11px] font-mono backdrop-blur flex items-center gap-3">
-            <span className="text-zinc-400">Mean Fleet IRI Index:</span>
-            <span className="font-bold text-emerald-400 text-xs">{stats.avgIri} / 100</span>
-            <span className="text-zinc-600">|</span>
-            <span className="text-zinc-400">Resolution:</span>
-            <span className="text-zinc-200">H3 Res-12 (~9.4m)</span>
+          {/* Map Canvas */}
+          <div className="flex-1 rounded-md border border-zinc-800 overflow-hidden bg-zinc-950 relative min-h-[360px]">
+            <OSMMap
+              center={mapCenter}
+              zoom={mapZoom}
+              hexagons={mapHexagons}
+              markers={mapDefectMarkers}
+              onMapClick={handleMapClick}
+              onHexagonClick={(hex) => {
+                const matched = roadCells.find((c) => {
+                  const hexId =
+                    c.heading_sector !== undefined ? `${c.h3_12}_${c.heading_sector}` : c.h3_12;
+                  return hexId === hex.id || c.h3_12 === hex.id;
+                });
+                if (matched) {
+                  if (activeMode === 'inspect') {
+                    handleSelectCell(matched);
+                  } else if (matched.centroid_lat && matched.centroid_lon) {
+                    handleMapClick([matched.centroid_lat, matched.centroid_lon]);
+                  }
+                }
+              }}
+              onMarkerClick={(marker) => {
+                const matched = defects.find((d) => d.id === marker.id);
+                if (matched) {
+                  if (activeMode === 'repair') {
+                    handleMapClick([matched.lat, matched.lon]);
+                  } else {
+                    setSelectedDefect(matched);
+                  }
+                }
+              }}
+            />
+
+            {/* Quick Floating Map Overlay */}
+            <div className="absolute top-3 left-3 z-10 bg-zinc-950/90 border border-zinc-800 rounded px-3 py-2 text-[11px] font-mono backdrop-blur flex items-center gap-3">
+              <span className="text-zinc-400">Mean Fleet IRI Index:</span>
+              <span className="font-bold text-emerald-400 text-xs">{stats.avgIri} / 100</span>
+              <span className="text-zinc-600">|</span>
+              <span className="text-zinc-400">Resolution:</span>
+              <span className="text-zinc-200">H3 Res-12 (~9.4m)</span>
+              <span className="text-zinc-600">|</span>
+              <span className="text-zinc-400">Active Defects:</span>
+              <span className="text-rose-400 font-bold">{stats.defectsCount}</span>
+            </div>
           </div>
         </div>
 
         {/* Right Sidebar: Cell Browser & Inspector */}
-        <div className="w-84 bg-zinc-950 border border-zinc-800 rounded-md flex flex-col overflow-hidden shrink-0">
+        <div className="w-full lg:w-84 bg-zinc-950 border border-zinc-800 rounded-md flex flex-col overflow-hidden shrink-0">
           {/* Header & Controls */}
           <div className="p-3 border-b border-zinc-800 flex items-center justify-between font-mono text-[11px]">
             <span className="flex items-center gap-1.5 font-semibold text-zinc-300 uppercase tracking-wider">
@@ -315,9 +717,9 @@ export default function RoadNetworkQuality() {
               Spatial Grid Inspector
             </span>
             <button
-              onClick={loadRoadCells}
+              onClick={loadNetworkData}
               className="text-zinc-500 hover:text-white transition-colors p-1"
-              title="Refresh road cells"
+              title="Refresh road cells and defects"
             >
               <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -337,7 +739,9 @@ export default function RoadNetworkQuality() {
             </div>
 
             <div className="flex items-center justify-between text-[10px] text-zinc-500 font-mono">
-              <span>Showing {filteredCells.length} of {roadCells.length} cells</span>
+              <span>
+                Showing {filteredCells.length} of {roadCells.length} cells
+              </span>
               {roughnessFilter !== 'all' && (
                 <button
                   type="button"
@@ -350,10 +754,12 @@ export default function RoadNetworkQuality() {
             </div>
           </div>
 
-          {/* Active Cell Inspector */}
+          {/* Active Cell / Defect Inspector */}
           <div className="p-3 border-b border-zinc-800 bg-zinc-900/30 space-y-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-zinc-400 text-[10px] uppercase font-mono font-semibold">Active Selection</span>
+              <span className="text-zinc-400 text-[10px] uppercase font-mono font-semibold">
+                Active Selection
+              </span>
               {selectedCell && (
                 <span
                   className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-bold ${
@@ -400,7 +806,9 @@ export default function RoadNetworkQuality() {
                 <div className="grid grid-cols-2 gap-2 pt-2 border-t border-zinc-900 text-[10px] font-mono">
                   <div>
                     <span className="text-zinc-500 block">Roughness Index</span>
-                    <span className="text-white font-bold text-xs">{selectedCell.roughness_index.toFixed(1)} / 100</span>
+                    <span className="text-white font-bold text-xs">
+                      {selectedCell.roughness_index.toFixed(1)} / 100
+                    </span>
                   </div>
                   <div>
                     <span className="text-zinc-500 block">Fleet Passes</span>
@@ -412,17 +820,25 @@ export default function RoadNetworkQuality() {
                   </div>
                   <div>
                     <span className="text-zinc-500 block">Spikes Logged</span>
-                    <span className={selectedCell.spike_count > 0 ? 'text-rose-400 font-bold' : 'text-zinc-400'}>
+                    <span
+                      className={
+                        selectedCell.spike_count > 0 ? 'text-rose-400 font-bold' : 'text-zinc-400'
+                      }
+                    >
                       {selectedCell.spike_count}
                     </span>
                   </div>
                   <div>
                     <span className="text-zinc-500 block">P85 Speed</span>
-                    <span className="text-zinc-200 font-bold">{selectedCell.speed_p85_kmh.toFixed(1)} km/h</span>
+                    <span className="text-zinc-200 font-bold">
+                      {selectedCell.speed_p85_kmh.toFixed(1)} km/h
+                    </span>
                   </div>
                   <div>
                     <span className="text-zinc-500 block">Defect Prob</span>
-                    <span className="text-zinc-200 font-bold">{(selectedCell.defect_confidence * 100).toFixed(0)}%</span>
+                    <span className="text-zinc-200 font-bold">
+                      {(selectedCell.defect_confidence * 100).toFixed(0)}%
+                    </span>
                   </div>
                 </div>
 
@@ -453,7 +869,8 @@ export default function RoadNetworkQuality() {
               filteredCells.map((cell, idx) => {
                 const isSelected =
                   selectedCell?.h3_12 === cell.h3_12 &&
-                  (selectedCell?.heading_sector === undefined || selectedCell?.heading_sector === cell.heading_sector);
+                  (selectedCell?.heading_sector === undefined ||
+                    selectedCell?.heading_sector === cell.heading_sector);
                 const cellKey =
                   cell.heading_sector !== undefined
                     ? `cell-${cell.h3_12}-s${cell.heading_sector}-${idx}`

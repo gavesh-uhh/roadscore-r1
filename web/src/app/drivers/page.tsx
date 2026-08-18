@@ -39,7 +39,11 @@ import {
 } from '@/lib/fleet/api';
 import { DriverRecord, VehicleRecord, DeviceRecord } from '@/lib/fleet/types';
 import { DriverDrawer } from '@/components/fleet/DriverDrawer';
-import { calculateContinuousScore24h, TelematicsEvent } from '@/lib/scoring/continuousEngine';
+import {
+  computeCanonicalScore,
+  computeFleetScore,
+  ScorableEvent as TelematicsEvent,
+} from '@/lib/scoring/canonicalEngine';
 import { ScoreAuditDrawer } from '@/components/scoring/ScoreAuditDrawer';
 
 interface ActiveTripInfo {
@@ -87,10 +91,10 @@ export default function DriversLeaderboard() {
       setVehicles(fleet.vehicles);
       setDevices(fleet.devices);
 
-      // Fetch dynamic trips, telematics events, and canonical engine scores
+      // Fetch dynamic trips, driver events, and canonical engine scores
       const [tripsRes, eventsRes, telemetryRes] = await Promise.all([
         supabase.from('trips').select('*').order('started_at', { ascending: false }),
-        supabase.from('driving_events').select('*'),
+        supabase.from('driving_events').select('*').or('attributed_to_driver.eq.true,category.eq.driver,type.ilike.driver.%').order('occurred_at', { ascending: false }),
         supabase.from('telemetry').select('device_id, accel_cal').order('server_received_at', { ascending: false }).limit(200),
       ]);
 
@@ -140,9 +144,6 @@ export default function DriversLeaderboard() {
           status: String(activeTripData.status || 'open'),
         } : null;
 
-        // Compute continuous 24h decay safety score from active driving events
-        const score24h = calculateContinuousScore24h(driverEvents);
-
         // Calculate total distance and trips
         const total_distance_km = driverTrips.reduce(
           (acc: number, t: any) => acc + (Number(t.distance_m) || 0) / 1000,
@@ -150,13 +151,22 @@ export default function DriversLeaderboard() {
         );
         const total_trips = driverTrips.length;
 
-        // Incident rate per 100km for driver-attributed violations
+        // Compute canonical safety score using backend canonical scoring engine
+        const canonicalResult = computeCanonicalScore({
+          distanceKm: total_distance_km,
+          events: driverEvents,
+          subjectType: 'driver',
+          subjectId: d.id,
+        });
+        const score24h = canonicalResult.score;
+
+        // Supporting analytics: Incident rate per 100km for driver-attributed violations
         const driverPenaltiesCount = driverEvents.filter((e) => e.attributed_to_driver !== false).length;
         const events_per_100km = total_distance_km > 0
-          ? Number((driverPenaltiesCount / (total_distance_km / 100)).toFixed(1))
+          ? Number(((driverPenaltiesCount / total_distance_km) * 100).toFixed(1))
           : 0;
 
-        // Calculate device road roughness average (RMS m/s2)
+        // Supporting analytics: Calculate device road roughness average (RMS m/s2)
         const driverTel = assignedDev ? allTelemetry.filter((tel: any) => tel.device_id === assignedDev) : [];
         let roughness = 0.15;
         if (driverTel.length > 0) {
@@ -264,11 +274,14 @@ export default function DriversLeaderboard() {
     await loadData();
   };
 
-  // Fleet aggregate metrics
-  const avgSafetyScore = drivers.length > 0
-    ? drivers.reduce((acc, d) => acc + d.score24h, 0) / drivers.length
-    : 100;
-  const inTripCount = drivers.filter((d) => !!d.active_trip).length;
+  // Fleet aggregate metrics (Canonical exposure-weighted Fleet Score §8)
+  const totalFleetDistanceKm = drivers.reduce((acc, d) => acc + d.total_distance_km, 0);
+  const fleetScoreResult = computeFleetScore({
+    totalDistanceKm: totalFleetDistanceKm,
+    events: telematicsEvents,
+  });
+  const canonicalFleetScore = fleetScoreResult.score;
+  const inTripCount = drivers.filter((d) => !d.active_trip).length;
   const assignedCount = drivers.filter((d) => d.assigned_vehicle_id).length;
 
   return (
@@ -351,20 +364,34 @@ export default function DriversLeaderboard() {
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-zinc-400 font-medium flex items-center gap-1.5">
                 <ShieldCheck size={13} className="text-emerald-400" />
-                Fleet Safety Average
+                Fleet Score
               </span>
-              <span className="text-[10px] font-mono text-emerald-400/80">Rolling 24h</span>
+              <span className="text-[10px] font-mono text-emerald-400/80">Canonical §8</span>
             </div>
             <div className="flex items-baseline gap-1.5">
-              <span className="text-2xl font-bold font-mono text-emerald-400 tracking-tight">
-                {avgSafetyScore.toFixed(1)}
+              <span
+                className={`text-2xl font-bold font-mono tracking-tight ${
+                  canonicalFleetScore >= 90
+                    ? 'text-emerald-400'
+                    : canonicalFleetScore >= 75
+                    ? 'text-amber-400'
+                    : 'text-rose-400'
+                }`}
+              >
+                {canonicalFleetScore.toFixed(1)}
               </span>
               <span className="text-xs font-mono text-zinc-500">/ 100</span>
             </div>
             <div className="w-full bg-zinc-900 rounded-full h-1 overflow-hidden mt-1">
               <div
-                className="h-full bg-emerald-500 rounded-full"
-                style={{ width: `${Math.min(100, Math.max(0, avgSafetyScore))}%` }}
+                className={`h-full rounded-full ${
+                  canonicalFleetScore >= 90
+                    ? 'bg-emerald-500'
+                    : canonicalFleetScore >= 75
+                    ? 'bg-amber-500'
+                    : 'bg-rose-500'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(0, canonicalFleetScore))}%` }}
               />
             </div>
           </div>

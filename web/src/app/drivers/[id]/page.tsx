@@ -5,15 +5,15 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Header } from '@/components/common/Header';
 import {
-  calculateContinuousScore24h,
+  computeCanonicalScore,
   calculateFactorRadarScores,
-  calculateDriverDeductions,
+  calculateCanonicalDeductions,
+  getCanonicalExcludedEvents,
   generateScoreTimeline,
-  getExcludedEvents,
-  TelematicsEvent,
+  ScorableEvent as TelematicsEvent,
   DeductionItem,
   ExcludedEventItem,
-} from '@/lib/scoring/continuousEngine';
+} from '@/lib/scoring/canonicalEngine';
 import { formatEventType } from '@/lib/events/format';
 import { createClient } from '@/lib/supabase/client';
 import { getFleetData, updateDriver, deleteDriver } from '@/lib/fleet/api';
@@ -182,49 +182,72 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
         setActiveTrip(null);
       }
 
-      // 6. Load driving events (matching driver_id or assigned device_id)
-      let eventsQuery = supabase
-        .from('driving_events')
-        .select('*')
-        .order('occurred_at', { ascending: false });
-
+      // 6. Load driver-attributed events and §8 fairness excluded events
       const filterClauses = [`driver_id.eq.${driverId}`];
       if (assignedDeviceId) {
         filterClauses.push(`device_id.eq.${assignedDeviceId}`);
       }
-      eventsQuery = eventsQuery.or(filterClauses.join(',')).limit(300);
 
-      const { data: eData } = await eventsQuery;
+      const [driverEventsRes, excludedEventsRes] = await Promise.all([
+        supabase
+          .from('driving_events')
+          .select('*')
+          .or(filterClauses.join(','))
+          .or('attributed_to_driver.eq.true,category.eq.driver,type.ilike.driver.%')
+          .order('occurred_at', { ascending: false }),
+        supabase
+          .from('driving_events')
+          .select('*')
+          .or(filterClauses.join(','))
+          .eq('attributed_to_driver', false)
+          .order('occurred_at', { ascending: false })
+          .limit(100),
+      ]);
 
-      const mappedEvents: TelematicsEvent[] = (eData || []).map((e: any) => ({
-        id: e.id,
-        event_key: e.event_key,
-        type: e.type,
-        severity: e.severity,
-        occurred_at: e.occurred_at,
-        magnitude: e.magnitude,
-        magnitude_unit: e.magnitude_unit,
-        attributed_to_driver: e.attributed_to_driver,
-        driver_id: driverId,
-        device_id: e.device_id,
-      }));
+      const combined = [...(driverEventsRes.data || []), ...(excludedEventsRes.data || [])];
+      const seenEventKeys = new Set<string>();
+      const mappedEvents: TelematicsEvent[] = [];
+
+      for (const e of combined) {
+        const key = String(e.event_key || e.id || '');
+        if (key && seenEventKeys.has(key)) continue;
+        if (key) seenEventKeys.add(key);
+
+        mappedEvents.push({
+          id: e.id,
+          event_key: e.event_key,
+          type: e.type,
+          severity: e.severity,
+          occurred_at: e.occurred_at,
+          magnitude: e.magnitude,
+          magnitude_unit: e.magnitude_unit,
+          attributed_to_driver: e.attributed_to_driver,
+          driver_id: driverId,
+          device_id: e.device_id,
+        });
+      }
 
       setEvents(mappedEvents);
 
-      // Compute dynamic continuous score matching /drivers and /
-      const score = calculateContinuousScore24h(mappedEvents);
-      setCurrentScore(score);
+      // Compute canonical score matching /drivers and /
+      const canonicalScoreResult = computeCanonicalScore({
+        distanceKm: distKm,
+        events: mappedEvents,
+        subjectType: 'driver',
+        subjectId: driverId,
+      });
+      setCurrentScore(canonicalScoreResult.score);
 
-      // Compute itemized deductions
-      const itemizedDeductions = calculateDriverDeductions(mappedEvents);
+      // Compute itemized deductions (supporting analytics)
+      const itemizedDeductions = calculateCanonicalDeductions(mappedEvents);
       setDeductions(itemizedDeductions);
 
       // Compute §8 fairness excluded events
-      const excluded = getExcludedEvents(mappedEvents);
+      const excluded = getCanonicalExcludedEvents(mappedEvents);
       setExcludedEvents(excluded);
 
-      // Compute score timeline
-      const timeline = generateScoreTimeline(mappedEvents);
+      // Compute score timeline (supporting analytics)
+      const timeline = generateScoreTimeline(mappedEvents, distKm);
       setTimelineData(timeline);
 
       // Average road roughness from device telemetry
@@ -430,7 +453,7 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
             >
               <div>
                 <div className="text-[10px] uppercase font-semibold text-zinc-400 tracking-wider">
-                  24h Safety Score
+                  Canonical Safety Score
                 </div>
                 <div className={`text-2xl font-bold tracking-tight ${scoreColor}`}>
                   {currentScore.toFixed(1)}
@@ -439,11 +462,11 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
               </div>
               <div className="border-l border-zinc-800 pl-3.5 text-right text-[11px] space-y-0.5">
                 <div className="text-zinc-400 font-medium">
-                  {deductions.length === 0 ? 'Clean 24h Baseline' : `${deductions.length} Infractions`}
+                  {deductions.length === 0 ? 'Pristine Record' : `${deductions.length} Infractions`}
                 </div>
                 <div className={deductions.length > 0 ? 'text-rose-400 font-semibold' : 'text-emerald-400'}>
                   {deductions.length > 0
-                    ? `-${deductions.reduce((sum, d) => sum + d.netPenalty, 0).toFixed(1)} pts deducted`
+                    ? `-${deductions.reduce((sum, d) => sum + d.penalty, 0).toFixed(1)} pts penalty`
                     : '100% Zero Penalty'}
                 </div>
               </div>
@@ -512,16 +535,16 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           {/* Left Column (5 Cols): 5 Safety Pillars & Score Trend */}
           <div className="lg:col-span-5 space-y-4">
-            {/* 5 Safety Factors */}
+            {/* 5 Safety Factors (Supporting Analytics) */}
             <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-3">
               <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2.5">
                 <div className="flex items-center gap-2">
                   <ShieldCheck size={14} className="text-emerald-400" />
                   <h2 className="text-xs font-semibold text-white uppercase tracking-wider">
-                    5-Factor Safety Pillars
+                    5-Factor Pillars <span className="text-[10px] text-zinc-500 font-normal lowercase">(supporting analytics)</span>
                   </h2>
                 </div>
-                <span className="text-[10px] text-zinc-500 font-mono">0-100 Score</span>
+                <span className="text-[10px] text-zinc-500 font-mono">0-100 Rating</span>
               </div>
 
               <div className="space-y-3">
@@ -555,16 +578,16 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
               </div>
             </div>
 
-            {/* Score History / Fluctuations Sparkline */}
+            {/* Score History / Trend Sparkline (Supporting Analytics) */}
             <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 space-y-2">
               <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
                 <div className="flex items-center gap-1.5">
                   <TrendingUp size={13} className="text-zinc-400" />
                   <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
-                    Score History (Past 12h)
+                    Score Trend <span className="text-[10px] text-zinc-500 font-normal lowercase">(supporting analytics)</span>
                   </span>
                 </div>
-                <span className="text-[10px] text-zinc-500 font-mono">12h Decay Half-Life</span>
+                <span className="text-[10px] text-zinc-500 font-mono">12h Timeline</span>
               </div>
 
               <div className="h-28 w-full pt-2">
@@ -611,7 +634,7 @@ export default function DriverScorecard({ params }: { params: Promise<{ id: stri
                   </h2>
                 </div>
                 <span className="text-[10px] text-zinc-400 font-mono">
-                  {deductions.length} {deductions.length === 1 ? 'event' : 'events'} in 24h
+                  {deductions.length} {deductions.length === 1 ? 'penalty event' : 'penalty events'}
                 </span>
               </div>
 

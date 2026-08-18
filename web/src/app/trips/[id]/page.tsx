@@ -6,6 +6,7 @@ import { Header } from '@/components/common/Header';
 import { MapMarker, MapPolyline, OSMMap } from '@/components/map/OSMMap';
 import { CockpitHUD, CockpitAlert, RadarBlip } from '@/components/cockpit/CockpitHUD';
 import { createClient } from '@/lib/supabase/client';
+import { computeCanonicalScore } from '@/lib/scoring/canonicalEngine';
 import {
   ResponsiveContainer,
   LineChart,
@@ -168,43 +169,14 @@ export default function TripReplayPage({ params }: { params: Promise<{ id: strin
         setTripScore(Number(scoreData.score));
       } else {
         // Compute canonical trip score from trip events & distance
-        const distanceKm = Math.max((tripData.distance_m || 0) / 1000, 1.0);
-        const scorableEvents = loadedEvents.filter(
-          (e) => e.attributed_to_driver !== false && e.category === 'driver'
-        );
-
-        const weights: Record<string, number> = {
-          'driver.harsh_brake': 8.0,
-          'driver.harsh_accel': 5.0,
-          'driver.sharp_corner': 3.0,
-          'driver.excessive_cornering_speed': 7.0,
-          'driver.swerving': 10.0,
-          'driver.avoidable_impact': 9.0,
-          'driver.speeding_relative': 6.0,
-          'driver.speeding_for_conditions': 7.0,
-          'driver.excessive_idling': 4.0,
-          'driver.continuous_driving': 8.0,
-        };
-
-        const sevMults: Record<string, number> = {
-          info: 0.0,
-          low: 0.8,
-          medium: 1.5,
-          high: 2.5,
-          critical: 4.0,
-        };
-
-        let rawPenalty = 0;
-        for (const e of scorableEvents) {
-          const w = weights[e.type] ?? 5.0;
-          const sm = sevMults[e.severity] ?? 1.0;
-          const conf = Number(e.confidence ?? 1.0);
-          rawPenalty += w * sm * conf;
-        }
-
-        const k = 15.0;
-        const dynScore = Math.max(0, Math.min(100, 100 - (100 * rawPenalty) / (distanceKm * k)));
-        setTripScore(parseFloat(dynScore.toFixed(1)));
+        const distanceKm = (tripData.distance_m || 0) / 1000;
+        const res = computeCanonicalScore({
+          distanceKm,
+          events: loadedEvents,
+          subjectType: 'trip',
+          subjectId: tripId,
+        });
+        setTripScore(res.score);
       }
 
       setLoading(false);

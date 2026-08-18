@@ -1,139 +1,148 @@
 import { describe, it, expect } from 'vitest';
 import {
-  calculateContinuousScore24h,
-  calculateDriverDeductions,
-  getExcludedEvents,
+  computeCanonicalScore,
+  calculateFactorRadarScores,
+  calculateCanonicalDeductions,
+  getCanonicalExcludedEvents,
   evaluateStreamHealth,
   resolveEventDriverId,
-  type TelematicsEvent,
-} from '../../web/src/lib/scoring/continuousEngine.js';
+  isScorable,
+  exclusionReason,
+  type ScorableEvent,
+} from '../../web/src/lib/scoring/canonicalEngine.js';
 
-describe('Telematics & Continuous Scoring Invariants', () => {
+describe('Canonical Scoring Engine Invariants (§8)', () => {
   const NOW = 1700000000000; // Fixed reference timestamp
 
   it('Invariant 1: Clean driver with no events maintains a perfect 100.0 score', () => {
-    const score = calculateContinuousScore24h([], NOW);
-    expect(score).toBe(100.0);
+    const res = computeCanonicalScore({
+      distanceKm: 25.0,
+      events: [],
+    });
+    expect(res.score).toBe(100.0);
+    expect(res.penalty).toBe(0);
+    expect(res.breakdown.contributions).toHaveLength(0);
   });
 
-  it('Invariant 2: Harsh driving event immediately reduces score reactively', () => {
-    const events: TelematicsEvent[] = [
+  it('Invariant 2: Harsh driving event reduces score according to canonical formula: 100 - (100 * penalty) / (exposure * k)', () => {
+    const events: ScorableEvent[] = [
       {
         id: 'evt_1',
         type: 'driver.harsh_brake',
         severity: 'high',
-        occurred_at: new Date(NOW - 5000).toISOString(), // 5s ago
-        attributed_to_driver: true,
+        occurredAt: new Date(NOW - 5000).toISOString(),
+        attributedToDriver: true,
+        confidence: 1.0,
         magnitude: -4.5,
       },
     ];
 
-    const score = calculateContinuousScore24h(events, NOW);
-    expect(score).toBeLessThan(100.0);
-    expect(score).toBe(80.0); // 100 - (8.0 base * 2.5 high severity * 1.0 driving * ~1.0 decay) = 80.0
+    // Distance = 10 km, k = 2.0.
+    // weight('driver.harsh_brake') = 1.0, severityMultiplier('high') = 3.5, confidence = 1.0 -> penalty = 3.5
+    // score = 100 - (100 * 3.5) / (10 * 2.0) = 100 - 17.5 = 82.5
+    const res = computeCanonicalScore({
+      distanceKm: 10.0,
+      events,
+    });
+
+    expect(res.score).toBe(82.5);
+    expect(res.penalty).toBe(3.5);
+    expect(res.breakdown.contributions).toHaveLength(1);
   });
 
   it('Invariant 3: Higher severity events incur proportionally larger penalties', () => {
-    const lowEvent: TelematicsEvent = {
+    const lowEvent: ScorableEvent = {
       type: 'driver.harsh_accel',
       severity: 'low',
-      occurred_at: new Date(NOW - 1000).toISOString(),
-      attributed_to_driver: true,
+      attributedToDriver: true,
+      confidence: 1.0,
     };
-    const criticalEvent: TelematicsEvent = {
+    const mediumEvent: ScorableEvent = {
+      type: 'driver.harsh_accel',
+      severity: 'medium',
+      attributedToDriver: true,
+      confidence: 1.0,
+    };
+    const criticalEvent: ScorableEvent = {
       type: 'driver.harsh_accel',
       severity: 'critical',
-      occurred_at: new Date(NOW - 1000).toISOString(),
-      attributed_to_driver: true,
+      attributedToDriver: true,
+      confidence: 1.0,
     };
 
-    const scoreLow = calculateContinuousScore24h([lowEvent], NOW);
-    const scoreCritical = calculateContinuousScore24h([criticalEvent], NOW);
+    const scoreLow = computeCanonicalScore({ distanceKm: 20, events: [lowEvent] }).score;
+    const scoreMedium = computeCanonicalScore({ distanceKm: 20, events: [mediumEvent] }).score;
+    const scoreCritical = computeCanonicalScore({ distanceKm: 20, events: [criticalEvent] }).score;
 
-    expect(scoreCritical).toBeLessThan(scoreLow);
+    expect(scoreCritical).toBeLessThan(scoreMedium);
+    expect(scoreMedium).toBeLessThan(scoreLow);
   });
 
   it('Invariant 4 (§8 Fairness Gate): Road defects and non-driver events MUST NOT reduce driver score', () => {
-    const roadDefectEvent: TelematicsEvent = {
+    const roadDefectEvent: ScorableEvent = {
       id: 'road_pothole_1',
       type: 'road.pothole_impact',
       severity: 'critical',
-      occurred_at: new Date(NOW - 1000).toISOString(),
-      attributed_to_driver: false, // Arbitrated to road surface
+      confidence: 1.0,
+      attributedToDriver: false, // Arbitrated to road surface
       magnitude: 2.8,
     };
 
-    const integrityEvent: TelematicsEvent = {
+    const integrityEvent: ScorableEvent = {
       id: 'sensor_fault_1',
       type: 'integrity.imu_drift_detected',
+      category: 'integrity',
       severity: 'high',
-      occurred_at: new Date(NOW - 2000).toISOString(),
-      attributed_to_driver: false,
+      confidence: 1.0,
+      attributedToDriver: false,
     };
 
-    const score = calculateContinuousScore24h([roadDefectEvent, integrityEvent], NOW);
-    expect(score).toBe(100.0);
+    const res = computeCanonicalScore({
+      distanceKm: 15.0,
+      events: [roadDefectEvent, integrityEvent],
+    });
 
-    const deductions = calculateDriverDeductions([roadDefectEvent, integrityEvent], NOW);
+    expect(res.score).toBe(100.0);
+    expect(res.penalty).toBe(0);
+
+    const deductions = calculateCanonicalDeductions([roadDefectEvent, integrityEvent]);
     expect(deductions.length).toBe(0);
 
-    const excluded = getExcludedEvents([roadDefectEvent, integrityEvent]);
+    const excluded = getCanonicalExcludedEvents([roadDefectEvent, integrityEvent]);
     expect(excluded.length).toBe(2);
-    expect(excluded[0]?.reason).toContain('§8 fairness rule');
+    expect(excluded[0]?.reason).toContain('§8 excludes');
   });
 
-  it('Invariant 5: Exponential decay recovers points over 12h half-life and restores to 100 after 24h', () => {
-    const recentEvent: TelematicsEvent = {
+  it('Invariant 5: Exposure normalisation dilutes penalty over greater distance', () => {
+    const event: ScorableEvent = {
       type: 'driver.harsh_brake',
-      severity: 'high',
-      occurred_at: new Date(NOW - 1000).toISOString(), // 1s ago
-      attributed_to_driver: true,
-    };
-    const halfLifeEvent: TelematicsEvent = {
-      type: 'driver.harsh_brake',
-      severity: 'high',
-      occurred_at: new Date(NOW - 12 * 3600 * 1000).toISOString(), // 12h ago
-      attributed_to_driver: true,
-    };
-    const expiredEvent: TelematicsEvent = {
-      type: 'driver.harsh_brake',
-      severity: 'high',
-      occurred_at: new Date(NOW - 25 * 3600 * 1000).toISOString(), // 25h ago
-      attributed_to_driver: true,
+      severity: 'medium',
+      attributedToDriver: true,
+      confidence: 1.0,
     };
 
-    const scoreRecent = calculateContinuousScore24h([recentEvent], NOW);
-    const scoreHalfLife = calculateContinuousScore24h([halfLifeEvent], NOW);
-    const scoreExpired = calculateContinuousScore24h([expiredEvent], NOW);
+    const shortTripScore = computeCanonicalScore({ distanceKm: 5.0, events: [event] }).score;
+    const longTripScore = computeCanonicalScore({ distanceKm: 200.0, events: [event] }).score;
 
-    // Recent deduction: 20 pts -> score 80
-    expect(scoreRecent).toBe(80.0);
-    // 12h decay: ~10 pts deduction -> score 90
-    expect(scoreHalfLife).toBe(90.0);
-    // 25h: expired out of sliding 24h window -> score restored to 100.0
-    expect(scoreExpired).toBe(100.0);
+    expect(longTripScore).toBeGreaterThan(shortTripScore);
   });
 
-  it('Invariant 6: Operational state alters penalty weight (Driving full penalty vs Idle reduced)', () => {
-    const drivingEvent: TelematicsEvent = {
-      type: 'driver.harsh_accel',
-      severity: 'medium',
-      occurred_at: new Date(NOW - 1000).toISOString(),
-      attributed_to_driver: true,
-      op_state: 'DRIVING',
-    };
-    const idleEvent: TelematicsEvent = {
-      type: 'driver.harsh_accel',
-      severity: 'medium',
-      occurred_at: new Date(NOW - 1000).toISOString(),
-      attributed_to_driver: true,
-      op_state: 'STATIONARY_IDLE',
+  it('Invariant 6: Weight 0 events (e.g. driver.collision_suspected) are alerts, not penalties (§2.7)', () => {
+    const collisionEvent: ScorableEvent = {
+      type: 'driver.collision_suspected',
+      severity: 'critical',
+      attributedToDriver: true,
+      confidence: 1.0,
     };
 
-    const scoreDriving = calculateContinuousScore24h([drivingEvent], NOW);
-    const scoreIdle = calculateContinuousScore24h([idleEvent], NOW);
+    expect(isScorable(collisionEvent)).toBe(false);
+    expect(exclusionReason(collisionEvent)).toContain('weight 0');
 
-    expect(scoreDriving).toBeLessThan(scoreIdle);
+    const res = computeCanonicalScore({
+      distanceKm: 10.0,
+      events: [collisionEvent],
+    });
+    expect(res.score).toBe(100.0);
   });
 
   it('Invariant 7: Multi-entity cascade resolves driver ID across driver_id, device_id, and mappings', () => {
@@ -141,7 +150,7 @@ describe('Telematics & Continuous Scoring Invariants', () => {
     const deviceMap = { 'ROADSCORE_001': 'driver-uuid-1' };
 
     // Direct driver_id
-    const evt1: TelematicsEvent = {
+    const evt1 = {
       type: 'driver.harsh_brake',
       severity: 'high',
       occurred_at: new Date(NOW).toISOString(),
@@ -150,7 +159,7 @@ describe('Telematics & Continuous Scoring Invariants', () => {
     expect(resolveEventDriverId(evt1, driverMap, deviceMap)).toBe('driver-uuid-1');
 
     // Mapped via device_id
-    const evt2: TelematicsEvent = {
+    const evt2 = {
       type: 'driver.harsh_brake',
       severity: 'high',
       occurred_at: new Date(NOW).toISOString(),
@@ -159,7 +168,7 @@ describe('Telematics & Continuous Scoring Invariants', () => {
     expect(resolveEventDriverId(evt2, driverMap, deviceMap)).toBe('driver-uuid-1');
 
     // Unmapped device
-    const evt3: TelematicsEvent = {
+    const evt3 = {
       type: 'driver.harsh_brake',
       severity: 'high',
       occurred_at: new Date(NOW).toISOString(),

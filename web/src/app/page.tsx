@@ -30,11 +30,11 @@ import {
 import { getFleetData } from '@/lib/fleet/api';
 import type { DriverRecord } from '@/lib/fleet/types';
 import {
-  calculateContinuousScore24h,
+  computeCanonicalScore,
   evaluateStreamHealth,
   StreamStatus,
-  TelematicsEvent,
-} from '@/lib/scoring/continuousEngine';
+  ScorableEvent as TelematicsEvent,
+} from '@/lib/scoring/canonicalEngine';
 import { formatEventType } from '@/lib/events/format';
 import { ScoreAuditDrawer } from '@/components/scoring/ScoreAuditDrawer';
 
@@ -160,15 +160,29 @@ export default function UnifiedOperationsDesk() {
     return evaluateStreamHealth(packetArrivals);
   }, [packetArrivals, decayTicker]);
 
-  // Compute live continuous 24h score from real driving events with 0ms reactivity & exponential decay
+  // Compute canonical driver safety scores using the unified backend scoring engine
   const drivers: DriverRow[] = useMemo(() => {
     return fleetDrivers.map((d) => {
       const assignedDev = d.assigned_device_id;
       const driverEvents = telematicsEvents.filter(
-        (e) => e.driver_id === d.id || (assignedDev && e.device_id === assignedDev)
+        (e) => (e.driverId || e.driver_id) === d.id || (assignedDev && (e.deviceId || e.device_id) === assignedDev)
       );
 
-      const continuousScore = calculateContinuousScore24h(driverEvents);
+      const driverTrips = trips.filter(
+        (t) => t.driver_id === d.id || (assignedDev && t.device_id === assignedDev)
+      );
+
+      const distKm = driverTrips.reduce(
+        (sum, t) => sum + (Number(t.distance_m) || 0) / 1000,
+        0
+      );
+
+      const canonicalResult = computeCanonicalScore({
+        distanceKm: distKm,
+        events: driverEvents,
+        subjectType: 'driver',
+        subjectId: d.id,
+      });
 
       const activeTrip = trips.find((t) => {
         const match = t.driver_id === d.id || (assignedDev && t.device_id === assignedDev);
@@ -180,7 +194,7 @@ export default function UnifiedOperationsDesk() {
       return {
         driver_id: d.id,
         full_name: d.name,
-        safety_score: continuousScore,
+        safety_score: canonicalResult.score,
         assigned_vehicle: d.assigned_vehicle_plate || 'Unassigned',
         assigned_device_id: d.assigned_device_id || null,
         status: activeTrip ? 'In Trip' : 'Idle',
@@ -188,17 +202,16 @@ export default function UnifiedOperationsDesk() {
         active_trip_id: activeTrip ? activeTrip.trip_id : null,
       };
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fleetDrivers, telematicsEvents, trips, decayTicker]);
+  }, [fleetDrivers, telematicsEvents, trips]);
 
   const loadDatabaseData = useCallback(async () => {
     try {
       // 1. Fetch Drivers, Events, and exact Telemetry count strictly from Supabase DB
       const fleetData = await getFleetData(supabase);
       const [eventsRes, telRes, tripRes, cellRes, telCountRes, defectsRes] = await Promise.all([
-        supabase.from('driving_events').select('*').order('occurred_at', { ascending: false }),
+        supabase.from('driving_events').select('*').or('attributed_to_driver.eq.true,category.eq.driver,type.ilike.driver.%').order('occurred_at', { ascending: false }),
         supabase.from('telemetry').select('*').order('server_received_at', { ascending: false }).limit(100),
-        supabase.from('trips').select('*').order('started_at', { ascending: false }).limit(15),
+        supabase.from('trips').select('*').order('started_at', { ascending: false }),
         supabase.from('road_cells').select('*').limit(60),
         supabase.from('telemetry').select('*', { count: 'exact', head: true }),
         supabase.from('road_defects').select('*').limit(50),

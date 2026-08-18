@@ -15,8 +15,9 @@ import type { Pipeline } from '../pipeline.js';
 import type { Db } from '../db/client.js';
 import { ping } from '../db/client.js';
 import type { Logger } from '../util/log.js';
-import { RULE_VERSION } from '../config/thresholds.js';
+import { RULE_VERSION, THRESHOLDS } from '../config/thresholds.js';
 import { ENGINE_VERSION } from '../types.js';
+import { computeScore, type ScorableEvent } from '../score/penalties.js';
 
 export interface ServerDeps {
   pipeline: Pipeline;
@@ -253,6 +254,92 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return reply.code(500).send({ error: String(err) });
     }
   });
+
+  // -------------------------------------------------------------------------
+  // Canonical Driver Scoring Endpoint — Single source of truth (§8)
+  // -------------------------------------------------------------------------
+  app.get<{ Params: { driverId: string }; Querystring: { distanceKm?: string } }>(
+    '/api/drivers/:driverId/score',
+    async (req, reply) => {
+      const { driverId } = req.params;
+      const { distanceKm } = req.query;
+
+      if (!deps.db) {
+        return reply.code(503).send({ error: 'database not available' });
+      }
+
+      try {
+        // Query assigned device if any
+        const devices = await deps.db<{ device_id: string }[]>`
+          select device_id from devices where driver_id = ${driverId} limit 1
+        `;
+        const assignedDeviceId = devices[0]?.device_id;
+
+        // Query total distance from trips
+        let totalDistanceKm = distanceKm ? parseFloat(distanceKm) : 0;
+        if (!distanceKm) {
+          const trips = assignedDeviceId
+            ? await deps.db<{ distance_m: number }[]>`
+                select distance_m from trips where driver_id = ${driverId} or device_id = ${assignedDeviceId}
+              `
+            : await deps.db<{ distance_m: number }[]>`
+                select distance_m from trips where driver_id = ${driverId}
+              `;
+          totalDistanceKm = trips.reduce((sum, t) => sum + (t.distance_m || 0) / 1000, 0);
+        }
+
+        // Query events
+        const rows = assignedDeviceId
+          ? await deps.db<any[]>`
+              select id, event_key, type, category, severity, confidence, attributed_to_driver, severity_censored
+              from driving_events
+              where driver_id = ${driverId} or device_id = ${assignedDeviceId}
+            `
+          : await deps.db<any[]>`
+              select id, event_key, type, category, severity, confidence, attributed_to_driver, severity_censored
+              from driving_events
+              where driver_id = ${driverId}
+            `;
+
+        const events: ScorableEvent[] = rows.map((r) => ({
+          id: r.id,
+          eventKey: r.event_key,
+          type: r.type,
+          category: r.category,
+          severity: r.severity,
+          confidence: Number(r.confidence ?? 1.0),
+          attributedToDriver: Boolean(r.attributed_to_driver),
+          severityCensored: Boolean(r.severity_censored),
+        }));
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        const score = computeScore(
+          {
+            subjectType: 'driver',
+            subjectId: driverId,
+            periodStart: nowSec - 86400,
+            periodEnd: nowSec,
+            distanceKm: totalDistanceKm,
+            events,
+          },
+          THRESHOLDS,
+          RULE_VERSION,
+        );
+
+        return {
+          score: score.score,
+          distanceKm: score.exposureKm,
+          penalty: score.breakdown.rawPenalty,
+          events: score.breakdown.contributions.length,
+          breakdown: score.breakdown,
+          ruleVersion: score.ruleVersion,
+        };
+      } catch (err) {
+        deps.log.error({ err, driverId }, 'driver score computation failed');
+        return reply.code(500).send({ error: String(err) });
+      }
+    },
+  );
 
   void gauges;
   return app;

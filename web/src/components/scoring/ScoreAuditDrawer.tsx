@@ -13,10 +13,10 @@ import {
   Zap,
 } from 'lucide-react';
 import {
-  calculateDriverDeductions,
-  getExcludedEvents,
-  TelematicsEvent,
-} from '@/lib/scoring/continuousEngine';
+  calculateCanonicalDeductions,
+  getCanonicalExcludedEvents,
+  ScorableEvent as TelematicsEvent,
+} from '@/lib/scoring/canonicalEngine';
 import { formatEventType } from '@/lib/events/format';
 
 interface ScoreAuditDrawerProps {
@@ -38,9 +38,9 @@ export function ScoreAuditDrawer({
 }: ScoreAuditDrawerProps) {
   if (!isOpen) return null;
 
-  const deductions = calculateDriverDeductions(events);
-  const excluded = getExcludedEvents(events);
-  const totalDeductions = deductions.reduce((sum, d) => sum + d.netPenalty, 0);
+  const deductions = calculateCanonicalDeductions(events);
+  const excluded = getCanonicalExcludedEvents(events);
+  const totalDeductions = deductions.reduce((sum, d) => sum + d.penalty, 0);
 
   return (
     <AnimatePresence>
@@ -80,7 +80,7 @@ export function ScoreAuditDrawer({
             <div className="flex items-center justify-between">
               <div>
                 <span className="text-[11px] text-zinc-400 uppercase tracking-wider font-mono">
-                  24h Continuous Score
+                  Canonical Safety Score
                 </span>
                 <div className="flex items-baseline gap-2 mt-0.5">
                   <span
@@ -101,7 +101,7 @@ export function ScoreAuditDrawer({
               <div className="text-right space-y-0.5">
                 <span className="text-[10px] text-zinc-500 font-mono block">Baseline: 100.0</span>
                 <span className="text-[10px] text-rose-400 font-mono font-medium block">
-                  Deductions: -{totalDeductions.toFixed(1)} pts
+                  Weighted Penalty: {totalDeductions.toFixed(2)} pts
                 </span>
               </div>
             </div>
@@ -109,7 +109,7 @@ export function ScoreAuditDrawer({
             <div className="p-2.5 rounded-md bg-zinc-900/80 border border-zinc-800 text-[11px] text-zinc-300 flex items-start gap-2">
               <Zap size={14} className="text-amber-400 shrink-0 mt-0.5" />
               <p>
-                Safety scores calculate in real-time with continuous 12-hour exponential half-life decay. Points recover automatically if driving remains smooth.
+                Scores are computed using the canonical engine: <code className="text-amber-300 font-mono">100 - (100 × penalty) / (exposure_km × k)</code>. Normalized by distance with §8 fairness exclusions.
               </p>
             </div>
           </div>
@@ -121,16 +121,16 @@ export function ScoreAuditDrawer({
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
                   <AlertTriangle size={12} className="text-rose-400" />
-                  Active Incident Deductions ({deductions.length})
+                  Active Contributing Penalties ({deductions.length})
                 </h4>
-                <span className="text-[10px] text-zinc-500 font-mono">Within 24 Hours</span>
+                <span className="text-[10px] text-zinc-500 font-mono">Canonical §8 Weights</span>
               </div>
 
               {deductions.length === 0 ? (
                 <div className="p-4 rounded-md bg-emerald-950/20 border border-emerald-900/40 text-center space-y-1">
                   <CheckCircle2 size={18} className="text-emerald-400 mx-auto" />
                   <p className="text-xs font-medium text-emerald-300">Clean Telematics Record</p>
-                  <p className="text-[10px] text-zinc-400">Zero driver-attributed harsh events in the past 24 hours.</p>
+                  <p className="text-[10px] text-zinc-400">Zero driver-attributed penalty events recorded.</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -150,7 +150,7 @@ export function ScoreAuditDrawer({
                             <span className="text-xs font-medium text-white">{fmt.label}</span>
                           </div>
                           <span className="text-xs font-mono font-bold text-rose-400">
-                            -{d.netPenalty.toFixed(2)} pts
+                            -{d.penalty.toFixed(2)} pts penalty
                           </span>
                         </div>
 
@@ -180,9 +180,9 @@ export function ScoreAuditDrawer({
                           </div>
 
                           <div className="p-1.5 rounded bg-black/50 border border-zinc-800/80 text-[9px] text-zinc-400 font-mono mt-1">
-                            <span className="text-zinc-500 block text-[8px] uppercase tracking-wider">Score Reconciliation Formula:</span>
+                            <span className="text-zinc-500 block text-[8px] uppercase tracking-wider">Canonical Formula Contribution:</span>
                             <span>
-                              {d.basePenalty} pts × {d.severityMultiplier}x ({d.severity}) × {d.stateWeight}x ({d.opState}) × {(d.decayFactor * 100).toFixed(0)}% (decay) = <strong className="text-rose-400">-{d.netPenalty.toFixed(2)} pts</strong>
+                              weight ({d.basePenalty}) × {d.severityMultiplier}x ({d.severity}) × {d.confidence} (conf) = <strong className="text-rose-400">{d.penalty.toFixed(2)} raw penalty</strong>
                             </span>
                           </div>
                         </div>
@@ -227,7 +227,7 @@ export function ScoreAuditDrawer({
           {/* Footer */}
           <div className="p-3 border-t border-zinc-800 bg-zinc-900/40 text-center">
             <p className="text-[10px] text-zinc-500 font-mono">
-              RoadScore Engine v0.1.0 • Spec §8 Continuous Scoring Rule
+              RoadScore Engine v0.1.0 • Canonical Rule §8 (Exposure-Normalized)
             </p>
           </div>
         </motion.div>

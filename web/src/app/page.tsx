@@ -475,8 +475,10 @@ export default function UnifiedOperationsDesk() {
     : events;
 
   // Add event markers from DB (guaranteeing uniqueness & rich data)
+  // Only surface HIGH-tier incidents (high + critical) on the map; hide low/medium/info clutter.
   const seenMarkerKeys = new Set<string>();
   for (const e of filteredEvents) {
+    if (e.severity !== 'high' && e.severity !== 'critical') continue;
     if (e.lat && e.lon) {
       const markerId = `evt-${e.event_key}`;
       if (seenMarkerKeys.has(markerId)) continue;
